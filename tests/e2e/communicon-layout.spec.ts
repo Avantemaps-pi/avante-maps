@@ -335,6 +335,81 @@ test.describe('slim header at 375x667', () => {
   });
 });
 
+test.describe('the Bot/Messages switch at 375x812', () => {
+  test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
+
+  // What a tab looks like once its colour transition has settled. The expected colours come from
+  // the theme's tokens, and contrast from the rendered text and pill colours
+  const readTab = (el: Element) => {
+    const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+    const luminance = (color: string) => {
+      const [r, g, b] = channels(color).map((c) => {
+        const v = c / 255;
+        return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const token = (name: string) => {
+      const probe = document.createElement('div');
+      probe.style.color = `hsl(${getComputedStyle(document.documentElement).getPropertyValue(name).trim()})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    const style = getComputedStyle(el);
+    const [lighter, darker] = [luminance(style.color), luminance(style.backgroundColor)].sort((a, b) => b - a);
+    return {
+      background: style.backgroundColor,
+      color: style.color,
+      weight: style.fontWeight,
+      shadow: style.boxShadow,
+      height: el.getBoundingClientRect().height,
+      contrast: (lighter! + 0.05) / (darker! + 0.05),
+      tokens: { background: token('--background'), accent: token('--accent'), primary: token('--primary') },
+    };
+  };
+
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`${scheme}: the selected tab is a ${scheme === 'light' ? 'page-coloured pill with a shadow' : 'flat accent pill'}, with readable text`, async ({ page }) => {
+      await page.addInitScript((s) => localStorage.setItem('colorScheme', s), scheme);
+      await setup(page);
+      if (scheme === 'dark') await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+      const bot = page.getByRole('tab', { name: 'Bot' });
+      const messages = page.getByRole('tab', { name: 'Messages' });
+
+      const expectSelected = async (tab: typeof bot, other: typeof bot) => {
+        await expect(tab).toHaveAttribute('aria-selected', 'true');
+        await expect(other).toHaveAttribute('aria-selected', 'false');
+        await expect
+          .poll(async () => {
+            const t = await tab.evaluate(readTab);
+            return t.background === (scheme === 'light' ? t.tokens.background : t.tokens.accent) && t.color === t.tokens.primary;
+          })
+          .toBe(true);
+        const selected = await tab.evaluate(readTab);
+        expect(selected.weight).toBe('600');
+        expect(Math.round(selected.height)).toBe(44);
+        // Tailwind's shadow utilities leave fully transparent layers even with no shadow
+        const visibleShadow = selected.shadow.replaceAll('rgba(0, 0, 0, 0)', '').includes('rgb');
+        expect(visibleShadow).toBe(scheme === 'light');
+        console.log(`${scheme} selected-tab contrast: ${selected.contrast.toFixed(2)}:1`);
+        expect(selected.contrast).toBeGreaterThanOrEqual(4.5);
+
+        await expect.poll(async () => (await other.evaluate(readTab)).background).toBe('rgba(0, 0, 0, 0)');
+        expect((await other.evaluate(readTab)).weight).toBe('500');
+      };
+
+      await expectSelected(bot, messages);
+      await messages.tap();
+      await expectSelected(messages, bot);
+
+      const track = page.getByRole('tablist', { name: 'CommuniCon mode' });
+      expect(await track.evaluate((el) => getComputedStyle(el).paddingTop)).toBe('3px');
+    });
+  }
+});
+
 test.describe('text size at 375x812', () => {
   test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
 
