@@ -92,8 +92,8 @@ const ORG_JSON_LD = JSON.stringify({
   "@context": "https://schema.org",
   "@type": "Organization",
   name: "Avante Maps",
-  url: "https://avantemaps.lovable.app",
-  logo: "https://avantemaps.lovable.app/lovable-uploads/Avante-Maps-icon.svg",
+  url: "https://mainnet.avantemaps.com",
+  logo: "https://mainnet.avantemaps.com/lovable-uploads/Avante-Maps-icon.svg",
   description: "Discover local and online businesses that accept Pi Network cryptocurrency.",
   sameAs: ["https://twitter.com/AvanteMap"],
 });
@@ -102,10 +102,10 @@ const WEBSITE_JSON_LD = JSON.stringify({
   "@context": "https://schema.org",
   "@type": "WebSite",
   name: "Avante Maps",
-  url: "https://avantemaps.lovable.app",
+  url: "https://mainnet.avantemaps.com",
   potentialAction: {
     "@type": "SearchAction",
-    target: "https://avantemaps.lovable.app/recommendations?search={search_term_string}",
+    target: "https://mainnet.avantemaps.com/recommendations?search={search_term_string}",
     "query-input": "required name=search_term_string",
   },
 });
@@ -140,8 +140,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "Find local businesses and pay with Pi Network cryptocurrency. Join the Pi business community.",
       },
-      { property: "og:image", content: "https://avantemaps.lovable.app/og-image.png" },
-      { property: "og:image:secure_url", content: "https://avantemaps.lovable.app/og-image.png" },
+      { property: "og:image", content: "https://mainnet.avantemaps.com/og-image.png" },
+      { property: "og:image:secure_url", content: "https://mainnet.avantemaps.com/og-image.png" },
       { property: "og:image:type", content: "image/png" },
       { property: "og:image:width", content: "1200" },
       { property: "og:image:height", content: "630" },
@@ -157,7 +157,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         name: "twitter:description",
         content: "Find local businesses and pay with Pi Network cryptocurrency",
       },
-      { name: "twitter:image", content: "https://avantemaps.lovable.app/og-image.png" },
+      { name: "twitter:image", content: "https://mainnet.avantemaps.com/og-image.png" },
       { name: "twitter:image:alt", content: "Avante Maps Preview" },
     ],
     links: [
