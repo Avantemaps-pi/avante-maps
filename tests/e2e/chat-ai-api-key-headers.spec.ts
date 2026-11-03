@@ -35,7 +35,7 @@ test('chat-ai request sends the publishable key as apikey, never as Bearer', asy
   await input.waitFor({ state: 'visible', timeout: 20_000 });
   // SSR renders the input before hydration; a fill made too early is wiped.
   // The send button only enables once React state holds the text.
-  const sendButton = input.locator('..').getByRole('button');
+  const sendButton = page.getByRole('button', { name: 'Send' });
   await expect(async () => {
     await input.fill('What are your opening hours?');
     await expect(sendButton).toBeEnabled({ timeout: 1_000 });
