@@ -98,6 +98,23 @@ test.describe('phone', () => {
   });
 });
 
+test.describe('tablet (700px)', () => {
+  test.use({ viewport: { width: 700, height: 900 } });
+
+  test('the menu button opens the side menu', async ({ page }) => {
+    await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
+    await mockMap(page, NEARBY_BUSINESSES);
+    await page.goto('/settings');
+    const menu = page.getByRole('button', { name: 'Open menu' }).filter({ visible: true });
+    await expect(menu).toHaveCount(1);
+    // The server-rendered page answers clicks once it has hydrated
+    await expect(async () => {
+      await menu.click();
+      await expect(page.getByRole('link', { name: 'Wallet' })).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
+  });
+});
+
 test.describe('desktop', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 

@@ -103,7 +103,7 @@ const PageHeader = ({
         <div className="flex items-center">
           {/* Show menu buttons only on pages without back button */}
           {showMenuButtons && <MobileMenuButton />}
-          {showMenuButtons && <DesktopMenuButton onClick={() => console.log('Desktop menu clicked')} />}
+          {showMenuButtons && <DesktopMenuButton onClick={handleMenuClick} />}
           
           {/* Index page menu button */}
           {isIndexPage && (
