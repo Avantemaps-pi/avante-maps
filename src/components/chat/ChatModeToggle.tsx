@@ -32,8 +32,8 @@ const ChatModeToggle: React.FC<ChatModeToggleProps> = ({
   };
 
   return (
-    <div className="border-b border-border bg-background px-3 py-1">
-      <div role="tablist" aria-label="CommuniCon mode" className="flex w-full rounded-full bg-muted p-0.5">
+    <div className="border-b border-border bg-background px-3 py-[3px]">
+      <div role="tablist" aria-label="CommuniCon mode" className="flex w-full rounded-full bg-muted p-[3px]">
         {MODES.map(({ value, label, icon: Icon }, index) => {
           const active = chatMode === value;
           return (
@@ -46,8 +46,10 @@ const ChatModeToggle: React.FC<ChatModeToggleProps> = ({
               tabIndex={active ? 0 : -1}
               onClick={() => onChatModeChange(value)}
               onKeyDown={(e) => handleKeyDown(e, index)}
-              className={`flex h-11 flex-1 items-center justify-center gap-2 rounded-full text-sm font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-muted ${
-                active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+              className={`flex h-11 flex-1 items-center justify-center gap-2 rounded-full text-sm transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-muted ${
+                active
+                  ? 'bg-background font-semibold text-primary shadow-sm dark:bg-accent dark:shadow-none'
+                  : 'font-medium text-muted-foreground hover:text-foreground'
               }`}
             >
               <Icon className="h-4 w-4" aria-hidden="true" />
