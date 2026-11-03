@@ -4,7 +4,7 @@
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
-const BASE_URL = "https://avantemaps.lovable.app";
+const BASE_URL = "https://avantemaps.com";
 
 interface SitemapEntry {
   path: string;
