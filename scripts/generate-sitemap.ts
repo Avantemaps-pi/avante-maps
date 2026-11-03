@@ -1,4 +1,5 @@
 // Runs before `vite dev` and `vite build` (predev/prebuild hooks); writes public/sitemap.xml.
+// The output depends only on the entries below (no dates), so it only changes when they do.
 
 import { writeFileSync } from "fs";
 import { resolve } from "path";
@@ -7,16 +8,13 @@ const BASE_URL = "https://avantemaps.lovable.app";
 
 interface SitemapEntry {
   path: string;
-  lastmod?: string;
   changefreq?: "always" | "hourly" | "daily" | "weekly" | "monthly" | "yearly" | "never";
   priority?: string;
 }
 
-const today = new Date().toISOString().slice(0, 10);
-
 const entries: SitemapEntry[] = [
-  { path: "/", changefreq: "daily", priority: "1.0", lastmod: today },
-  { path: "/recommendations", changefreq: "daily", priority: "0.9", lastmod: today },
+  { path: "/", changefreq: "daily", priority: "1.0" },
+  { path: "/recommendations", changefreq: "daily", priority: "0.9" },
   { path: "/bookmarks", changefreq: "weekly", priority: "0.5" },
   { path: "/communicon", changefreq: "monthly", priority: "0.5" },
   { path: "/notifications", changefreq: "weekly", priority: "0.4" },
@@ -36,7 +34,6 @@ function generateSitemap(entries: SitemapEntry[]) {
     [
       `  <url>`,
       `    <loc>${BASE_URL}${e.path}</loc>`,
-      e.lastmod ? `    <lastmod>${e.lastmod}</lastmod>` : null,
       e.changefreq ? `    <changefreq>${e.changefreq}</changefreq>` : null,
       e.priority ? `    <priority>${e.priority}</priority>` : null,
       `  </url>`,
