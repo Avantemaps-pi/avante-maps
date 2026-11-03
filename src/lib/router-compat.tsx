@@ -62,13 +62,17 @@ export function useNavigate(): NavigateFn {
 export function useLocation() {
   const loc = tsLocation();
   return useMemo(
-    () => ({
-      pathname: loc.pathname,
-      search: loc.searchStr ? `?${loc.searchStr}` : "",
-      hash: loc.hash ?? "",
-      state: (loc.state ?? null) as unknown,
-      key: loc.pathname + (loc.searchStr ?? ""),
-    }),
+    () => {
+      // TanStack's searchStr already starts with "?"; react-router's search has exactly one
+      const query = (loc.searchStr ?? "").replace(/^\?+/, "");
+      return {
+        pathname: loc.pathname,
+        search: query ? `?${query}` : "",
+        hash: loc.hash ?? "",
+        state: (loc.state ?? null) as unknown,
+        key: loc.pathname + (loc.searchStr ?? ""),
+      };
+    },
     [loc.pathname, loc.searchStr, loc.hash, loc.state],
   );
 }
