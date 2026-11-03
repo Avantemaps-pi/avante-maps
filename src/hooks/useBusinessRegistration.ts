@@ -10,6 +10,7 @@ import { containsInappropriateContent } from '@/utils/contentFilter';
 import type { BusinessInsertPayload } from '@/types/businessPayload';
 import { useImageUpload } from '@/hooks/useImageUpload';
 import { getBusinessLimit } from '@/hooks/useBusinessLimit';
+import { getSupabaseFunctionsUrl } from '@/config/supabase';
 
 export const useBusinessRegistration = (onSuccess?: () => void) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -318,7 +319,7 @@ export const useBusinessRegistration = (onSuccess?: () => void) => {
 
       // ✅ Insert business via Edge Function with explicit Authorization header
       const response = await fetch(
-        `https://xvpwbocwasbtzrzrxyvu.supabase.co/functions/v1/insert-business`,
+        `${getSupabaseFunctionsUrl()}/insert-business`,
         {
           method: 'POST',
           headers: {
