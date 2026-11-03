@@ -98,6 +98,23 @@ test.describe('phone', () => {
   });
 });
 
+test.describe('tablet (700px)', () => {
+  test.use({ viewport: { width: 700, height: 900 } });
+
+  test('the menu button opens the side menu', async ({ page }) => {
+    await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
+    await mockMap(page, NEARBY_BUSINESSES);
+    await page.goto('/settings');
+    const menu = page.getByRole('button', { name: 'Open menu' }).filter({ visible: true });
+    await expect(menu).toHaveCount(1);
+    // The server-rendered page answers clicks once it has hydrated
+    await expect(async () => {
+      await menu.click();
+      await expect(page.getByRole('link', { name: 'Wallet' })).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 15_000 });
+  });
+});
+
 test.describe('desktop', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
@@ -109,6 +126,30 @@ test.describe('desktop', () => {
     await expect(page.getByRole('link', { name: 'CommuniCon' })).toBeVisible();
     // No bottom nav on desktop
     await expect(page.locator('nav.fixed')).toHaveCount(0);
+  });
+
+  // Since #135 pages with a back button leave out the menu button, but that button never shows
+  // at desktop width on any page. The sidebar's only collapse control is the keyboard shortcut
+  // (no visible trigger anywhere in the app), and it works on CommuniCon too, so nothing is lost
+  test('on CommuniCon the sidebar works, and the shortcut that collapses it brings it back', async ({ page }) => {
+    await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
+    await page.goto('/settings');
+    await expect(page.getByRole('link', { name: 'Wallet' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open menu' }).filter({ visible: true })).toHaveCount(0);
+
+    await page.goto('/communicon');
+    await expect(page.getByRole('tab', { name: 'Bot' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open menu' }).filter({ visible: true })).toHaveCount(0);
+    const wallet = page.getByRole('link', { name: 'Wallet' });
+    await expect(wallet).toBeInViewport();
+
+    await page.keyboard.press('Control+b');
+    await expect(wallet).not.toBeInViewport();
+    await page.keyboard.press('Control+b');
+    await expect(wallet).toBeInViewport();
+
+    await wallet.click();
+    await page.waitForURL('**/wallet');
   });
 
   test('on CommuniCon the desktop side menu is still there', async ({ page }) => {

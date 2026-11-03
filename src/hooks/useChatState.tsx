@@ -8,7 +8,7 @@ import { verificationProgress } from '@/components/chat/verificationProgress';
 import { useToast } from '@/hooks/use-toast';
 import { ChatMode } from '@/components/chat/ChatInterface';
 import { supabase } from '@/integrations/supabase/client';
-import { SUPABASE_CONFIG } from '@/config/supabase';
+import { SUPABASE_CONFIG, getSupabaseFunctionsUrl } from '@/config/supabase';
 import { useAuth } from '@/context/auth';
 
 const CHAT_STORAGE_PREFIX = 'avante-chat-messages-v2';
@@ -199,7 +199,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
           content: msg.text
         }));
 
-      const CHAT_URL = `https://xvpwbocwasbtzrzrxyvu.supabase.co/functions/v1/chat-ai`;
+      const CHAT_URL = `${getSupabaseFunctionsUrl()}/chat-ai`;
 
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
@@ -606,7 +606,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
 
       // Call the verify-business edge function
       const response = await fetch(
-        'https://xvpwbocwasbtzrzrxyvu.supabase.co/functions/v1/verify-business',
+        `${getSupabaseFunctionsUrl()}/verify-business`,
         {
           method: 'POST',
           headers: {
@@ -824,7 +824,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
       const response = await fetch(
-        'https://xvpwbocwasbtzrzrxyvu.supabase.co/functions/v1/contact-otp',
+        `${getSupabaseFunctionsUrl()}/contact-otp`,
         {
           method: 'POST',
           headers: {

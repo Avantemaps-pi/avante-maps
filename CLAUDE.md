@@ -19,12 +19,12 @@ I'm working on **Avante Maps** — a Pi Network-powered business directory web a
 
 - **Framework:** TanStack Start (`@tanstack/react-start`) with server-side rendering — NOT a client-only SPA. React 19 + TypeScript 5.8 + Vite 8, configured through `@lovable.dev/vite-tanstack-config` in `vite.config.ts` (it already bundles the React, Tailwind, nitro and TanStack plugins — don't add them again). `src/server.ts` is the SSR server entry.
 - **Routing:** TanStack Router (`@tanstack/react-router`), file-based routes in `src/routes/` (`src/routeTree.gen.ts` is generated — don't hand-edit). NOT React Router. `src/lib/router-compat.tsx` is a shim that maps React Router v6-style calls (`useNavigate`, `Link`, etc.) onto TanStack Router, so older components still import from `@/lib/router-compat`.
-- **Backend:** Supabase (Postgres + Auth + Edge Functions + Realtime), client `@supabase/supabase-js` 2.110.0
-- **Supabase URL/project is hardcoded**, not read from env: `src/config/supabase.ts` (`SUPABASE_CONFIG`) holds the URL, publishable key (`sb_publishable_…`, in the field still named `anonKey`) and project ID for `xvpwbocwasbtzrzrxyvu`, and `useBusinessRegistration.ts` / `useChatState.tsx` also hardcode full function URLs. `VITE_SUPABASE_URL` in `.env` is NOT read by any client code, so changing env vars in a deployment does not change which project it talks to — every build uses this one project.
-- **Data fetching:** TanStack Query (React Query) 5.56.2 — used across all major hooks with `staleTime`/`gcTime` caching
-- **Forms/validation:** React Hook Form 7.53.0 + Zod 3.23.8
-- **UI:** Tailwind CSS 3.4.11 + shadcn/ui (Radix UI primitives) + Lucide React icons + Sonner for toasts
-- **Maps:** Leaflet 1.9.4 + React Leaflet 4.2.1 + React Leaflet Cluster 2.1.0, OpenStreetMap tiles (NOTE: `@googlemaps/react-wrapper` is in package.json but UNUSED — the entire map is Leaflet-based, this dependency is dead weight)
+- **Backend:** Supabase (Postgres + Auth + Edge Functions + Realtime), client `@supabase/supabase-js` 2.110
+- **Supabase URL/project is hardcoded**, not read from env: `src/config/supabase.ts` (`SUPABASE_CONFIG`) holds the URL, publishable key (`sb_publishable_…`, in the field still named `anonKey`) and project ID for `xvpwbocwasbtzrzrxyvu`. Edge function URLs come from `getSupabaseFunctionsUrl()` in the same file; don't hardcode them. `VITE_SUPABASE_URL` in `.env` is NOT read by any client code, so changing env vars in a deployment does not change which project it talks to — every build uses this one project.
+- **Data fetching:** TanStack Query (React Query) 5.101 — used across all major hooks with `staleTime`/`gcTime` caching
+- **Forms/validation:** React Hook Form 7.71 + Zod 3.24
+- **UI:** Tailwind CSS 4 with tw-animate-css + shadcn/ui (Radix UI primitives) + Lucide React icons + Sonner for toasts
+- **Maps:** Leaflet 1.9.4 + React Leaflet 5 + React Leaflet Cluster 4.1, OpenStreetMap tiles (NOTE: `@googlemaps/react-wrapper` is in package.json but UNUSED — the entire map is Leaflet-based, this dependency is dead weight)
 - **Charts:** Recharts 2.15.4 (business analytics dashboards)
 - **Testing:** Playwright configured (`playwright.config.ts` → `tests/e2e/`) but test coverage appears minimal/possibly empty — verify before assuming tests exist
 - **Package manager:** Bun. `bun.lock` is the ONLY lockfile — `package-lock.json` was deliberately removed (and is gitignored), and `bun.lockb` was superseded by the text-format `bun.lock`. Don't commit a second lockfile.
@@ -177,6 +177,15 @@ const { data: bizRow } = await supabase
    - `select('*')` eliminated everywhere except admin dashboards and `count: 'exact', head: true` queries (where it's a no-op)
    - `MapMarkers` component memoized with `React.memo` + custom comparator, marker icons memoized with `useMemo`
    - Map auto-geolocation on load via `navigator.geolocation`, silent fallback to world view if denied/unavailable
+
+---
+
+## App Conventions
+
+- **Navigation rule:** main destinations show the bottom nav. Task pages (Registration steps, Update business, Write a review, Pricing, Verification info, Analytics, CommuniCon) hide it and use the header back arrow (`backButton` + `hideBottomNav` on `AppLayout`). Back never dead-ends: with no earlier in-app page it goes to `/` (`src/lib/inAppHistory.ts`).
+- **Toasts:** the only Sonner `<Toaster />` is in `src/routes/__root.tsx`. Don't add another, or every toast shows twice.
+- **Edge function URLs:** use `getSupabaseFunctionsUrl()`.
+- **CommuniCon one-tap confirm link:** `/communicon?confirm_code=&business=` is read and stripped from the URL in `Communicon.tsx`. `contact-otp` builds the link from `PI_APP_LINK_BASE`.
 
 ---
 

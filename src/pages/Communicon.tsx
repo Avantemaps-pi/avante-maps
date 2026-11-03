@@ -26,7 +26,7 @@ interface CodeDialogState {
 
 // The email's "Confirm in Avante Maps" link: ?confirm_code=<6 digits>&business=<id>
 const readConfirmLink = (search: string) => {
-  // router-compat's search can start with "??"; URLSearchParams only drops one
+  // Tolerates any number of leading "?"s; router-compat's search has exactly one
   const params = new URLSearchParams(search.replace(/^\?+/, ''));
   const code = params.get('confirm_code') ?? '';
   const business = params.get('business') ?? '';
