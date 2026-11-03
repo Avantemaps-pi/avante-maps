@@ -133,7 +133,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "author", content: "Avante Maps Team" },
       // Open Graph / Facebook
       { property: "og:type", content: "website" },
-      { property: "og:url", content: "https://avantemaps.com/" },
+      { property: "og:url", content: "https://mainnet.avantemaps.com/" },
       { property: "og:title", content: "Avante Maps - Discover Local Businesses" },
       {
         property: "og:description",
