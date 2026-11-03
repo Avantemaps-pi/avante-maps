@@ -1,0 +1,9 @@
+{
+  "singleQuote": true,
+  "overrides": [
+    {
+      "files": "src/components/ui/**",
+      "options": { "singleQuote": false }
+    }
+  ]
+}
