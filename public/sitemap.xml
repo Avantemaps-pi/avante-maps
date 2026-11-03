@@ -1,72 +1,72 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://avantemaps.lovable.app/</loc>
+    <loc>https://mainnet.avantemaps.com/</loc>
     <changefreq>daily</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/recommendations</loc>
+    <loc>https://mainnet.avantemaps.com/recommendations</loc>
     <changefreq>daily</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/bookmarks</loc>
+    <loc>https://mainnet.avantemaps.com/bookmarks</loc>
     <changefreq>weekly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/communicon</loc>
+    <loc>https://mainnet.avantemaps.com/communicon</loc>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/notifications</loc>
+    <loc>https://mainnet.avantemaps.com/notifications</loc>
     <changefreq>weekly</changefreq>
     <priority>0.4</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/registered-business</loc>
+    <loc>https://mainnet.avantemaps.com/registered-business</loc>
     <changefreq>weekly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/verification-info</loc>
+    <loc>https://mainnet.avantemaps.com/verification-info</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/contact</loc>
+    <loc>https://mainnet.avantemaps.com/contact</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/about</loc>
+    <loc>https://mainnet.avantemaps.com/about</loc>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/registration</loc>
+    <loc>https://mainnet.avantemaps.com/registration</loc>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/pricing</loc>
+    <loc>https://mainnet.avantemaps.com/pricing</loc>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/terms</loc>
+    <loc>https://mainnet.avantemaps.com/terms</loc>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/privacy</loc>
+    <loc>https://mainnet.avantemaps.com/privacy</loc>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
-    <loc>https://avantemaps.lovable.app/cookies</loc>
+    <loc>https://mainnet.avantemaps.com/cookies</loc>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
