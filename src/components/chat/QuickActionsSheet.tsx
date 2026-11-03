@@ -22,6 +22,16 @@ interface QuickActionsSheetProps {
   onCloseAutoFocus?: (event: Event) => void;
 }
 
+// A gentler open than the shared sheet's defaults: 650ms in, 350ms out. With reduced motion,
+// no slide, just a 150ms fade
+const SHEET_MOTION =
+  'data-[state=open]:duration-[650ms] data-[state=open]:ease-[cubic-bezier(0.32,0.72,0,1)] data-[state=closed]:duration-[350ms] data-[state=closed]:ease-in ' +
+  'motion-reduce:data-[state=open]:duration-150 motion-reduce:data-[state=closed]:duration-150 ' +
+  'motion-reduce:data-[state=open]:slide-in-from-bottom-0 motion-reduce:data-[state=closed]:slide-out-to-bottom-0 ' +
+  'motion-reduce:data-[state=open]:fade-in-0 motion-reduce:data-[state=closed]:fade-out-0';
+const OVERLAY_MOTION =
+  'data-[state=open]:duration-[650ms] data-[state=closed]:duration-[350ms] motion-reduce:data-[state=open]:duration-150 motion-reduce:data-[state=closed]:duration-150';
+
 /** CommuniCon's "Quick actions" bottom sheet, opened from the + in the message box */
 const QuickActionsSheet: React.FC<QuickActionsSheetProps> = ({ open, onOpenChange, actions, onAction, onCloseAutoFocus }) => (
   <Sheet open={open} onOpenChange={onOpenChange}>
@@ -30,8 +40,8 @@ const QuickActionsSheet: React.FC<QuickActionsSheetProps> = ({ open, onOpenChang
       hideClose
       aria-describedby={undefined}
       onCloseAutoFocus={onCloseAutoFocus}
-      overlayClassName="bg-slate-900/45"
-      className="gap-0 rounded-t-2xl bg-card px-4 pt-2.5 pb-[max(1.75rem,env(safe-area-inset-bottom))] text-card-foreground"
+      overlayClassName={`bg-slate-900/45 ${OVERLAY_MOTION}`}
+      className={`gap-0 rounded-t-2xl bg-card px-4 pt-2.5 pb-[max(1.75rem,env(safe-area-inset-bottom))] text-card-foreground ${SHEET_MOTION}`}
     >
       <div className="mx-auto mb-3.5 h-1 w-9 rounded-full bg-input" aria-hidden="true" />
       <div className="mb-1.5 flex items-center justify-between">
