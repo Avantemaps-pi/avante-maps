@@ -26,7 +26,7 @@ I'm working on **Avante Maps** — a Pi Network-powered business directory web a
 - **UI:** Tailwind CSS 4 with tw-animate-css + shadcn/ui (Radix UI primitives) + Lucide React icons + Sonner for toasts
 - **Maps:** Leaflet 1.9.4 + React Leaflet 5 + React Leaflet Cluster 4.1, OpenStreetMap tiles (NOTE: `@googlemaps/react-wrapper` is in package.json but UNUSED — the entire map is Leaflet-based, this dependency is dead weight)
 - **Charts:** Recharts 2.15.4 (business analytics dashboards)
-- **Testing:** Playwright configured (`playwright.config.ts` → `tests/e2e/`) but test coverage appears minimal/possibly empty — verify before assuming tests exist
+- **Testing:** Playwright e2e suite in `tests/e2e/` and Deno tests for edge functions (see Testing below)
 - **Package manager:** Bun. `bun.lock` is the ONLY lockfile — `package-lock.json` was deliberately removed (and is gitignored), and `bun.lockb` was superseded by the text-format `bun.lock`. Don't commit a second lockfile.
 - **Hosting:** Vercel (via GitHub) for both `mainnet.avantemaps.com` and `testnet.avantemaps.com` (confirmed via `server: Vercel` / `x-vercel-id` response headers), with SSR running as a Vercel function. The build's Cloudflare target in `@lovable.dev/vite-tanstack-config` is only nitro's *fallback* when no provider is detected; on Vercel, nitro auto-detects Vercel and builds for it. Local builds fall back to Cloudflare output (`.output/`). Supabase Edge Functions run on Deno.
 - **Payments/blockchain:** Pi Network SDK
@@ -191,7 +191,7 @@ const { data: bizRow } = await supabase
 
 ## Testing
 
-- **Playwright is configured** (`playwright.config.ts` → `tests/e2e/`) but coverage appears minimal or possibly empty — verify what actually exists in `tests/e2e/` before assuming any regression safety net is in place.
+- **Playwright e2e suite** in `tests/e2e/` (`playwright.config.ts`): ~214 tests, ~27 min, with mocked map and Supabase helpers in `tests/e2e/helpers/`. **Deno tests for edge functions** sit next to each function (e.g. `supabase/functions/contact-otp/index.test.ts`). During a PR, run only the specs the change touches; run the full suite before big merges.
 - **When fixing a bug, add a regression test in `tests/e2e/` when feasible** — especially for anything touching auth, business limits, or messaging, since these are the areas with the worst history of silent regressions in this project. Don't just patch the bug and move on without a test that would have caught it.
 - If adding a Playwright test isn't feasible for a given fix (e.g. it requires live Pi Browser auth that can't be simulated), say so explicitly rather than skipping the question entirely.
 
