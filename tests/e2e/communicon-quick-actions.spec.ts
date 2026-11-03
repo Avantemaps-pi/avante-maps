@@ -62,7 +62,59 @@ async function openSheet(page: Page) {
   await plus(page).tap();
   await expect(sheet(page)).toBeVisible();
   // Let the slide-in finish before tapping inside it
-  await page.waitForTimeout(600);
+  await sheet(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+}
+
+interface RecordedAnimation {
+  who: 'sheet' | 'overlay';
+  state: string | null;
+  duration: number;
+  easing: string;
+  start: { translateY: number; opacity: number };
+  middle: { translateY: number; opacity: number };
+}
+
+// Records each sheet and overlay animation from inside the page as it starts, since a 150ms one
+// could be over before the test could read it: its timing, and where it is at the start and halfway
+async function recordAnimations(page: Page) {
+  await page.evaluate(() => {
+    const records: unknown[] = [];
+    (window as unknown as { __animations: unknown[] }).__animations = records;
+    document.addEventListener('animationstart', (event) => {
+      const el = event.target as HTMLElement;
+      const isSheet = el.getAttribute('role') === 'dialog';
+      if (!isSheet && !el.classList.contains('bg-slate-900/45')) return;
+      const animation = el.getAnimations().find((a) => (a as CSSAnimation).animationName === event.animationName);
+      if (!animation) return;
+      const duration = animation.effect!.getTiming().duration as number;
+      const resumeAt = animation.currentTime;
+      const at = (time: number) => {
+        animation.currentTime = time;
+        const style = getComputedStyle(el);
+        return { translateY: new DOMMatrix(style.transform).m42, opacity: Number(style.opacity) };
+      };
+      records.push({
+        who: isSheet ? 'sheet' : 'overlay',
+        state: el.getAttribute('data-state'),
+        duration,
+        easing: getComputedStyle(el).animationTimingFunction,
+        start: at(0),
+        middle: at(duration / 2),
+      });
+      animation.currentTime = resumeAt;
+    }, true);
+  });
+}
+
+async function recorded(page: Page, who: RecordedAnimation['who'], state: 'open' | 'closed') {
+  const find = () =>
+    page.evaluate(
+      ([w, s]) =>
+        ((window as unknown as { __animations: RecordedAnimation[] }).__animations).find((r) => r.who === w && r.state === s) ?? null,
+      [who, state],
+    );
+  await expect.poll(find).not.toBeNull();
+  return (await find())!;
 }
 
 test.describe('375x812', () => {
@@ -136,6 +188,55 @@ test.describe('375x812', () => {
     await page.keyboard.press('Escape');
     await expect(sheet(page)).toHaveCount(0);
     await expect(plus(page)).toBeFocused();
+  });
+});
+
+test.describe('the sheet animation at 375x812', () => {
+  test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
+
+  test('opens over 650ms with the soft curve, closes over 350ms ease-in; the overlay fades with it', async ({ page }) => {
+    await setup(page);
+    await recordAnimations(page);
+    await openSheet(page);
+    const opening = await recorded(page, 'sheet', 'open');
+    expect(opening.duration).toBe(650);
+    expect(opening.easing).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
+    expect(opening.start.translateY).toBeGreaterThan(100);
+    expect(opening.start.opacity).toBe(1);
+    const overlayOpening = await recorded(page, 'overlay', 'open');
+    expect(overlayOpening.duration).toBe(650);
+    expect(overlayOpening.start.opacity).toBe(0);
+
+    await page.keyboard.press('Escape');
+    const closing = await recorded(page, 'sheet', 'closed');
+    expect(closing.duration).toBe(350);
+    expect(closing.easing).toBe('cubic-bezier(0.4, 0, 1, 1)');
+    expect(closing.middle.translateY).toBeGreaterThan(0);
+    const overlayClosing = await recorded(page, 'overlay', 'closed');
+    expect(overlayClosing.duration).toBe(350);
+    expect(overlayClosing.middle.opacity).toBeLessThan(1);
+    await expect(sheet(page)).toHaveCount(0);
+  });
+
+  test('reduced motion: no slide, a 150ms fade both ways', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await setup(page);
+    await recordAnimations(page);
+    await openSheet(page);
+    const opening = await recorded(page, 'sheet', 'open');
+    expect(opening.duration).toBe(150);
+    expect(opening.start.translateY).toBe(0);
+    expect(opening.middle.translateY).toBe(0);
+    expect(opening.start.opacity).toBe(0);
+    expect((await recorded(page, 'overlay', 'open')).duration).toBe(150);
+
+    await page.keyboard.press('Escape');
+    const closing = await recorded(page, 'sheet', 'closed');
+    expect(closing.duration).toBe(150);
+    expect(closing.middle.translateY).toBe(0);
+    expect(closing.middle.opacity).toBeLessThan(1);
+    expect((await recorded(page, 'overlay', 'closed')).duration).toBe(150);
+    await expect(sheet(page)).toHaveCount(0);
   });
 });
 
