@@ -589,14 +589,17 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
 
   // Runs verify-business for one business and posts the result card (after a business is
   // picked, and from the card's "Check again")
-  const runVerification = useCallback(async (business: { id: number; business_name: string }) => {
-    const processingMessage = {
-      id: Date.now() + 1,
-      text: `Processing verification request for "${business.business_name}"...`,
-      sender: "support",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    setMessages(prev => [...prev, processingMessage]);
+  // With a target message ("Check again"), its card updates in place; otherwise a new one is added
+  const runVerification = useCallback(async (business: { id: number; business_name: string }, targetMessageId?: number) => {
+    if (targetMessageId === undefined) {
+      const processingMessage = {
+        id: Date.now() + 1,
+        text: `Processing verification request for "${business.business_name}"...`,
+        sender: "support",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      setMessages(prev => [...prev, processingMessage]);
+    }
 
     try {
       // Get current session for auth token
@@ -665,7 +668,21 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
         businessName: business.business_name,
         walletMissing: !bizResult?.totalTransactions && !bizResult?.uniqueWallets && bizResult?.reason?.includes('wallet'),
         businessId: business.id,
+        checkedAt: new Date().toISOString(),
       };
+
+      if (targetMessageId !== undefined) {
+        setMessages(prev => prev.map(msg =>
+          msg.id === targetMessageId
+            ? {
+                ...msg,
+                verificationMetrics: metrics,
+                contactVerification: { email: contactEmail, businessId: business.id },
+                animateVerification: false,
+              }
+            : msg
+        ));
+      }
 
       if (bizResult?.verified) {
         const successMessage: ChatMessage = {
@@ -678,7 +695,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
           animateVerification: true,
           contactVerification: { email: contactEmail, businessId: business.id },
         };
-        setMessages(prev => [...prev, successMessage]);
+        if (targetMessageId === undefined) setMessages(prev => [...prev, successMessage]);
 
         toast({
           title: "Verified!",
@@ -696,7 +713,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
           animateVerification: true,
           contactVerification: { email: contactEmail, businessId: business.id },
         };
-        setMessages(prev => [...prev, failMessage]);
+        if (targetMessageId === undefined) setMessages(prev => [...prev, failMessage]);
 
         const { done, total } = verificationProgress(metrics);
         toast({
@@ -707,7 +724,17 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
 
     } catch (error: any) {
       console.error('Verification request error:', error);
-      
+
+      // Check again: the card stays as it was
+      if (targetMessageId !== undefined) {
+        toast({
+          title: "Couldn't check again",
+          description: error.message || 'Please try again.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
       const errorMessage = {
         id: Date.now() + 2,
         text: `Verification failed for "${business.business_name}". ${error.message || 'Please try again.'}`,
@@ -753,7 +780,8 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
 
   // "Check again" on a result card: the same business, no picker
   const checkVerificationAgain = useCallback(
-    (businessId: number, businessName: string) => runVerification({ id: businessId, business_name: businessName }),
+    (businessId: number, businessName: string, messageId?: number) =>
+      runVerification({ id: businessId, business_name: businessName }, messageId),
     [runVerification]
   );
 
@@ -874,18 +902,15 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     };
   }, []);
 
-  // Marks the stored cards for this email and business as confirmed
+  // Marks the latest card for this email and business as confirmed. Older cards are a record
+  // of their own check, so they keep what they showed
   const markContactConfirmed = useCallback((email: string, businessId: number) => {
-    setMessages(prev => prev.map(msg =>
-      msg.contactVerification?.email.toLowerCase() === email.toLowerCase() && msg.contactVerification?.businessId === businessId
-        ? {
-            ...msg,
-            verificationMetrics: msg.verificationMetrics
-              ? { ...msg.verificationMetrics, contactInfoConfirmed: true }
-              : msg.verificationMetrics,
-          }
-        : msg
-    ));
+    setMessages(prev => {
+      const latest = [...prev].reverse().find(msg => msg.verificationMetrics && msg.contactVerification?.businessId === businessId);
+      if (!latest?.verificationMetrics || latest.contactVerification?.email.toLowerCase() !== email.toLowerCase()) return prev;
+      const confirmed = { ...latest, verificationMetrics: { ...latest.verificationMetrics, contactInfoConfirmed: true } };
+      return prev.map(msg => (msg === latest ? confirmed : msg));
+    });
   }, []);
 
   const verifyContactOTP = useCallback(async (email: string, otp: string, businessId: number): Promise<ContactOTPResult> => {
