@@ -174,7 +174,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <ul className="mt-1 space-y-1 text-sm">
             {msg.listings.map(listing => (
               <li key={listing.id}>
-                • {listing.name} — {listing.status}
+                {listing.name} · {listing.status}
                 {listing.inactive && <span className="ml-1.5 text-xs text-muted-foreground">Inactive</span>}
               </li>
             ))}

@@ -899,7 +899,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
 
     const listings = businesses.map(b => {
       const verified = b.is_verified || b.verification_status === 'verified';
-      const status = verified ? '✓ Verified' : (b.verification_status ? `• ${b.verification_status}` : '• Not verified');
+      const status = verified ? '✓ Verified' : (b.verification_status || 'Not verified');
       return { id: b.id, name: b.business_name, status, inactive: !b.is_active };
     });
     const active = businesses.filter(business => business.is_active);
