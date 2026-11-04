@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { hasInAppHistory } from '@/lib/inAppHistory';
-import { FormProvider } from 'react-hook-form';
+import { FormProvider, type SubmitErrorHandler } from 'react-hook-form';
 import { Form } from '@/components/ui/form';
 import { Tabs } from '@/components/ui/tabs';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -13,6 +13,8 @@ import FormHeader from './registration/components/FormHeader';
 import TabNavigation from './registration/components/TabNavigation';
 import TabContent from './registration/components/TabContent';
 import { Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { FormValues, daysOfWeek } from './registration/formSchema';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,6 +25,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+
+// Which tab shows each field, in tab order
+const TAB_FIELDS: Array<{ tab: string; fields: Array<keyof FormValues> }> = [
+  { tab: 'business-owner', fields: ['firstName', 'lastName', 'businessName'] },
+  { tab: 'address', fields: ['country', 'streetAddress', 'apartment', 'city', 'state', 'zipCode'] },
+  { tab: 'contact', fields: ['countryCode', 'phone', 'email', 'website'] },
+  { tab: 'hours', fields: daysOfWeek.flatMap((day) => [day.open, day.close, day.closed] as Array<keyof FormValues>) },
+  { tab: 'details', fields: ['businessTypes', 'businessDescription', 'piWalletAddress'] },
+];
 
 interface BusinessUpdateFormProps {
   business: Business;
@@ -38,6 +49,9 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const [selectedTab, setSelectedTab] = useState('business-owner');
+  const formRef = useRef<HTMLFormElement>(null);
+  // Set when an invalid submit jumps to another tab: focus its field once the tab has rendered
+  const pendingInvalidFocusRef = useRef(false);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
   
   // Initialize form with business data
@@ -109,6 +123,35 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
     leavePage();
   };
 
+  // First invalid control on screen; a chip group focuses its first chip
+  const focusInvalidField = () => {
+    requestAnimationFrame(() => {
+      const invalid = formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]');
+      const target = invalid?.matches('[role="group"]') ? invalid.querySelector<HTMLElement>('button') : invalid;
+      target?.focus();
+      target?.scrollIntoView({ block: 'center' });
+    });
+  };
+
+  useEffect(() => {
+    if (!pendingInvalidFocusRef.current) return;
+    pendingInvalidFocusRef.current = false;
+    focusInvalidField();
+  }, [selectedTab]);
+
+  // Submit with errors: go to the earliest tab with one, where the field shows its message
+  const handleInvalid: SubmitErrorHandler<FormValues> = (errors) => {
+    toast.error('Fix the highlighted field to save');
+    const tab = TAB_FIELDS.find(({ fields }) => fields.some((field) => errors[field]))?.tab;
+    if (!tab) return;
+    if (tab === selectedTab) {
+      focusInvalidField();
+    } else {
+      pendingInvalidFocusRef.current = true;
+      setSelectedTab(tab);
+    }
+  };
+
   const handleSubmit = async (values: any) => {
     await onSubmit(values);
     // Reset form state after successful submission
@@ -135,7 +178,7 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
 
       <FormProvider {...form}>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6 w-full">
+          <form ref={formRef} onSubmit={form.handleSubmit(handleSubmit, handleInvalid)} className="space-y-6 w-full">
             <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
               <TabNavigation 
                 isMobile={isMobile}
@@ -182,7 +225,7 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
             </AlertDialogCancel>
             <AlertDialogAction onClick={() => {
               setShowUnsavedChangesDialog(false);
-              form.handleSubmit(handleSubmit)();
+              form.handleSubmit(handleSubmit, handleInvalid)();
             }}>
               Save Changes
             </AlertDialogAction>

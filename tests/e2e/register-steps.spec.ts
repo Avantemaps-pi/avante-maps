@@ -235,7 +235,8 @@ test('the country is filled in from the IP location (ipwho.is over https)', asyn
 // Every field label on the step: 14px semibold, the title's colour, no icon
 async function expectStepLabels(page: Page) {
   const titleColour = await title(page).evaluate((el) => getComputedStyle(el).color);
-  const labels = await body(page).locator('label').evaluateAll((els) =>
+  // A checkbox's own label (the Hours "Closed" toggles) isn't a field label
+  const labels = await body(page).locator('label:not(:has([role="checkbox"]))').evaluateAll((els) =>
     els.map((el) => {
       const cs = getComputedStyle(el);
       return { text: el.textContent?.trim(), size: cs.fontSize, weight: cs.fontWeight, colour: cs.color, icons: el.querySelectorAll('svg:not(.animate-spin)').length };

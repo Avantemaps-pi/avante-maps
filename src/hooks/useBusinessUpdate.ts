@@ -9,6 +9,7 @@ import { useImageUpload } from '@/hooks/useImageUpload';
 import { FormValues } from '@/components/business/registration/formSchema';
 import { Business } from '@/types/business';
 import { secureLog } from '@/utils/secureLogger';
+import { formatFullAddress, geocodeAddress } from '@/components/business/registration/utils/addressUtils';
 
 export const useBusinessUpdate = (business: Business, onSuccess?: () => void) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -99,6 +100,42 @@ export const useBusinessUpdate = (business: Business, onSuccess?: () => void) =>
       } else {
         notLoaded.push('hours');
       }
+
+      // Stored as registration stores them: the apartment is part of street_address
+      const addressFields: Array<[column: string, stored: string | null | undefined, value: string]> = [
+        ['street_address', business.streetAddress, values.apartment ? `${values.streetAddress}, ${values.apartment}` : values.streetAddress],
+        ['city', business.city, values.city],
+        ['state', business.state, values.state],
+        ['zip_code', business.zipCode, values.zipCode],
+        ['country', business.country, values.country],
+      ];
+      let addressChanged = false;
+      for (const [column, stored, value] of addressFields) {
+        if (stored === undefined) {
+          notLoaded.push(column);
+          continue;
+        }
+        updatePayload[column] = value;
+        if ((stored ?? '').trim() !== value.trim()) addressChanged = true;
+      }
+      if (values.apartment) {
+        updatePayload['address_components'] = { apartment: values.apartment };
+      }
+
+      // A new address moves the map pin. If it can't be located the address is still saved,
+      // and the pin stays where it was
+      let pinNotMoved = false;
+      if (addressChanged && !addressFields.some(([column]) => notLoaded.includes(column))) {
+        const position = await geocodeAddress(formatFullAddress(values));
+        if (position?.lat && position?.lng) {
+          updatePayload['lat'] = position.lat;
+          updatePayload['lng'] = position.lng;
+          updatePayload['coordinates'] = JSON.stringify({ lat: position.lat, lng: position.lng });
+        } else {
+          pinNotMoved = true;
+        }
+      }
+
       if (notLoaded.length > 0) {
         secureLog.warn('Business update skipped fields that were not loaded', { businessId: business.id, notLoaded });
         toast.warning("Some details couldn't be loaded, so they weren't changed. Reopen the business to edit them.");
@@ -144,6 +181,10 @@ export const useBusinessUpdate = (business: Business, onSuccess?: () => void) =>
       console.log('✅ Business updated successfully:', business.id);
       await queryClient.invalidateQueries({ queryKey: ['businesses'] });
       toast.success('Business information updated successfully!');
+      if (pinNotMoved) {
+        secureLog.warn('Business address saved without a new position', { businessId: business.id });
+        toast.warning("Address saved, but we couldn't update the map pin");
+      }
       
       // Clear uploaded images and reset removed images
       imageUpload.clearImages();

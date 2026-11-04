@@ -43,7 +43,9 @@ const ROW = {
   contact_info: CONTACT, hours: HOURS, pi_wallet_address: WALLET,
 };
 
-async function setup(page: Page, row: Record<string, unknown> = ROW) {
+const NEW_POSITION = { lat: -33.9321, lng: 18.8602 };
+
+async function setup(page: Page, row: Record<string, unknown> = ROW, geocoder: 'works' | 'fails' = 'works') {
   const gets: string[] = [];
   const patches: Record<string, unknown>[] = [];
   await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
@@ -68,7 +70,14 @@ async function setup(page: Page, row: Record<string, unknown> = ROW) {
     return route.fulfill({ json: match ? [picked] : [] });
   });
   await page.addInitScript((s) => localStorage.setItem('supabase.auth.token', JSON.stringify(s)), session);
-  return { gets, patches };
+  const geocoded: string[] = [];
+  await page.route('**/functions/v1/geocode-address', (route) => {
+    geocoded.push((route.request().postDataJSON() as { address: string }).address);
+    return geocoder === 'fails'
+      ? route.fulfill({ status: 500, json: { error: 'boom' } })
+      : route.fulfill({ json: { suggestions: [{ lat: NEW_POSITION.lat, lon: NEW_POSITION.lng, address: {} }] } });
+  });
+  return { gets, patches, geocoded };
 }
 
 const fromList = async (page: Page) => {
@@ -149,7 +158,7 @@ test('a direct load with no Supabase session: asks to log in, no form, no busine
 });
 
 test('changing only the email saves it, with everything else as stored', async ({ page }) => {
-  const { patches } = await setup(page);
+  const { patches, geocoded } = await setup(page);
   await fromList(page);
   await tab(page, 'Contact').tap();
   await page.locator('#email').fill('new@harbour.example');
@@ -162,6 +171,12 @@ test('changing only the email saves it, with everything else as stored', async (
   // The confirmation stays the server's: a new email reads "Not confirmed" until it's confirmed
   expect(body).not.toHaveProperty('contact_email_verified_for');
   expect(body).not.toHaveProperty('contact_email_verified_at');
+  // The address is unchanged, so the pin isn't touched
+  expect(body['city']).toBe(ROW.city);
+  expect(body).not.toHaveProperty('lat');
+  expect(body).not.toHaveProperty('lng');
+  expect(body).not.toHaveProperty('coordinates');
+  expect(geocoded).toEqual([]);
 });
 
 test('a business loaded without contact_info, hours and wallet: saving leaves them out', async ({ page }) => {
@@ -219,4 +234,139 @@ test('a direct load: Go back goes to Your businesses, not out of the app', async
   await expect(tab(page, 'Contact')).toBeVisible();
   await page.getByRole('button', { name: 'Go back' }).tap();
   await page.waitForURL('**/registered-business');
+});
+
+const ADDRESS_UNCHANGED = { street_address: ROW.street_address, state: ROW.state, zip_code: ROW.zip_code, country: ROW.country };
+
+test('changing the city saves it, keeps the other address fields, and moves the pin', async ({ page }) => {
+  const { patches, geocoded } = await setup(page);
+  await fromList(page);
+  await tab(page, 'Address').tap();
+  await expect(page.locator('#city')).toHaveValue(ROW.city);
+  await page.locator('#city').fill('Stellenbosch');
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  const body = patches[0]!;
+  console.log(`PATCH (new city): ${JSON.stringify({ street_address: body['street_address'], city: body['city'], state: body['state'], zip_code: body['zip_code'], country: body['country'], lat: body['lat'], lng: body['lng'], coordinates: body['coordinates'] })}`);
+  expect(body).toMatchObject({ ...ADDRESS_UNCHANGED, city: 'Stellenbosch', ...NEW_POSITION });
+  // As registration stores it
+  expect(JSON.parse(body['coordinates'] as string)).toEqual(NEW_POSITION);
+  expect(body).not.toHaveProperty('location');
+  expect(geocoded).toEqual(['12 Dock Road, Stellenbosch, Western Cape, 8001, South Africa']);
+  await expect(page.getByText("couldn't update the map pin")).toHaveCount(0);
+});
+
+test('when the geocoder fails: the address is saved, the position stays, a toast says so', async ({ page }) => {
+  const { patches, geocoded } = await setup(page, ROW, 'fails');
+  await fromList(page);
+  await tab(page, 'Address').tap();
+  await page.locator('#city').fill('Stellenbosch');
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  const body = patches[0]!;
+  console.log(`PATCH (geocoder failed): ${JSON.stringify({ street_address: body['street_address'], city: body['city'], state: body['state'], zip_code: body['zip_code'], country: body['country'], lat: body['lat'], lng: body['lng'], coordinates: body['coordinates'] })}`);
+  expect(body).toMatchObject({ ...ADDRESS_UNCHANGED, city: 'Stellenbosch' });
+  expect(body).not.toHaveProperty('lat');
+  expect(body).not.toHaveProperty('lng');
+  expect(body).not.toHaveProperty('coordinates');
+  expect(geocoded).toHaveLength(1);
+  await expect(page.getByText("Address saved, but we couldn't update the map pin")).toBeVisible();
+});
+
+test('typing an apartment saves it as registration does: in the street, and in address_components', async ({ page }) => {
+  const { patches, geocoded } = await setup(page);
+  await fromList(page);
+  await tab(page, 'Address').tap();
+  await page.locator('#apartment').fill('Unit 4');
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toMatchObject({ street_address: '12 Dock Road, Unit 4', address_components: { apartment: 'Unit 4' }, ...NEW_POSITION });
+  expect(geocoded).toEqual(['12 Dock Road, Unit 4, Cape Town, Western Cape, 8001, South Africa']);
+});
+
+test('an address not loaded is left out of the save, and nothing is geocoded', async ({ page }) => {
+  const { city: _city, ...partial } = ROW;
+  const { patches, geocoded } = await setup(page, partial);
+  await page.goto(`/update-registration/${ID}`);
+  await tab(page, 'Address').tap();
+  await page.locator('#city').fill('Typed City');
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).not.toHaveProperty('city');
+  expect(patches[0]).toMatchObject(ADDRESS_UNCHANGED);
+  expect(geocoded).toEqual([]);
+});
+
+test('an invalid stored website: Submit jumps to Contact, shows the error, focuses the field, sends nothing', async ({ page }) => {
+  const { patches } = await setup(page, { ...ROW, contact_info: { ...CONTACT, website: 'https://harbour.example' } });
+  await fromList(page);
+  await submit(page);
+  await expect(tab(page, 'Contact')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('Website URL must start with https:// and contain a .pinet subdomain', { exact: false })).toBeVisible();
+  await expect(page.locator('#website')).toBeFocused();
+  await expect(page.locator('#website')).toBeInViewport();
+  await expect(page.getByText('Fix the highlighted field to save')).toBeVisible();
+  expect(patches).toEqual([]);
+});
+
+test('fixing the field then lets the save go through', async ({ page }) => {
+  const { patches } = await setup(page, { ...ROW, contact_info: { ...CONTACT, website: 'https://harbour.example' } });
+  await fromList(page);
+  await submit(page);
+  await expect(page.locator('#website')).toBeFocused();
+  await page.locator('#website').fill(CONTACT.website);
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect((patches[0]!['contact_info'] as { website: string }).website).toBe(CONTACT.website);
+});
+
+for (const width of [320, 375]) {
+  test.describe(`the Hours step at ${width}px`, () => {
+    test.use({ viewport: { width, height: 812 } });
+
+    test('every time fits inside its card, with 44px tap targets', async ({ page }) => {
+      await setup(page);
+      await fromList(page);
+      await tab(page, 'Hours').tap();
+      const card = (await page.getByText('Trading Hours').locator('xpath=ancestor::div[contains(@class,"shadow-xs")][1]').boundingBox())!;
+      const times = page.locator('input[type="time"]');
+      await expect(times).toHaveCount(14);
+      for (const input of await times.all()) {
+        const box = (await input.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(card.x);
+        expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
+        expect(Math.round(box.height)).toBeGreaterThanOrEqual(44);
+      }
+      // Opening and closing share a line, with a gap
+      const open = (await times.nth(0).boundingBox())!;
+      const close = (await times.nth(1).boundingBox())!;
+      expect(close.y).toBe(open.y);
+      expect(close.x).toBeGreaterThanOrEqual(open.x + open.width);
+      // The whole "Closed" label is the tap target, and tapping it toggles the day
+      const closed = page.getByRole('checkbox', { name: 'Monday closed' });
+      const label = closed.locator('xpath=ancestor::label');
+      const hit = (await label.boundingBox())!;
+      expect(Math.round(hit.height)).toBeGreaterThanOrEqual(44);
+      expect(Math.round(hit.width)).toBeGreaterThanOrEqual(44);
+      await label.getByText('Closed').tap();
+      await expect(closed).toBeChecked();
+      await expect(times.nth(0)).toBeDisabled();
+    });
+  });
+}
+
+test.describe('the Hours step at 1024px', () => {
+  test.use({ viewport: { width: 1024, height: 900 } });
+
+  test('stays one row per day', async ({ page }) => {
+    await setup(page);
+    await fromList(page);
+    await tab(page, 'Hours').tap();
+    const closed = (await page.getByRole('checkbox', { name: 'Monday closed' }).boundingBox())!;
+    const open = (await page.locator('input[type="time"]').nth(0).boundingBox())!;
+    const close = (await page.locator('input[type="time"]').nth(1).boundingBox())!;
+    expect(Math.abs(closed.y + closed.height / 2 - (open.y + open.height / 2))).toBeLessThanOrEqual(4);
+    expect(close.y).toBe(open.y);
+    expect(closed.x).toBeLessThan(open.x);
+  });
 });
