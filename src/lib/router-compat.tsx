@@ -86,7 +86,7 @@ export function useParams<T extends Record<string, string | undefined> = Record<
 
 // ---------- useSearchParams (@/lib/router-compat compat) ----------
 
-export function useSearchParams(): [URLSearchParams, (init: URLSearchParams | Record<string, string> | ((prev: URLSearchParams) => URLSearchParams), opts?: { replace?: boolean }) => void] {
+export function useSearchParams(): [URLSearchParams, (init: URLSearchParams | Record<string, string> | ((prev: URLSearchParams) => URLSearchParams), opts?: { replace?: boolean; resetScroll?: boolean }) => void] {
   const loc = tsLocation();
   const nav = tsNavigate();
   const router = useRouter();
@@ -94,7 +94,7 @@ export function useSearchParams(): [URLSearchParams, (init: URLSearchParams | Re
   const setParams = useCallback(
     (
       init: URLSearchParams | Record<string, string> | ((prev: URLSearchParams) => URLSearchParams),
-      opts?: { replace?: boolean },
+      opts?: { replace?: boolean; resetScroll?: boolean },
     ) => {
       // Functional updaters read the router's live location, not the render
       // snapshot — react-router passes call-time params, and chained updates
@@ -109,7 +109,12 @@ export function useSearchParams(): [URLSearchParams, (init: URLSearchParams | Re
             : new URLSearchParams(init);
       const searchObj: Record<string, string> = {};
       next.forEach((v, k) => { searchObj[k] = v; });
-      nav({ to: live.pathname, search: searchObj as never, ...(opts?.replace !== undefined ? { replace: opts.replace } : {}) });
+      nav({
+        to: live.pathname,
+        search: searchObj as never,
+        ...(opts?.replace !== undefined ? { replace: opts.replace } : {}),
+        ...(opts?.resetScroll !== undefined ? { resetScroll: opts.resetScroll } : {}),
+      });
     },
     [nav, router],
   );

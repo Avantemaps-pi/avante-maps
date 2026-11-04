@@ -5,7 +5,7 @@ import { FormProvider, type SubmitErrorHandler } from 'react-hook-form';
 import { Form } from '@/components/ui/form';
 import { Tabs } from '@/components/ui/tabs';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { useNavigate } from '@/lib/router-compat';
+import { useNavigate, useSearchParams } from '@/lib/router-compat';
 import { Business } from '@/types/business';
 import { useBusinessFormInit } from '@/hooks/useBusinessFormInit';
 import { useBusinessUpdate } from '@/hooks/useBusinessUpdate';
@@ -48,8 +48,13 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
   ({ business, onSuccess }, ref) => {
   const isMobile = useIsMobile();
   const navigate = useNavigate();
-  const [selectedTab, setSelectedTab] = useState('business-owner');
+  const [searchParams, setSearchParams] = useSearchParams();
+  // ?field=piWalletAddress opens on that field's tab. Anything else in it changes nothing
+  const linkedField = searchParams.get('field');
+  const linkedTab = TAB_FIELDS.find(({ fields }) => fields.some((field) => field === linkedField))?.tab;
+  const [selectedTab, setSelectedTab] = useState(linkedTab ?? 'business-owner');
   const formRef = useRef<HTMLFormElement>(null);
+  const pendingLinkedFieldRef = useRef(linkedTab ? linkedField : null);
   // Set when an invalid submit jumps to another tab: focus its field once the tab has rendered
   const pendingInvalidFocusRef = useRef(false);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
@@ -138,6 +143,23 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
     pendingInvalidFocusRef.current = false;
     focusInvalidField();
   }, [selectedTab]);
+
+  // Opened on a field: focus it once its tab has rendered, then drop it from the URL so Back and
+  // reloads behave normally. The router would otherwise scroll to the top after that navigation
+  useEffect(() => {
+    const field = pendingLinkedFieldRef.current;
+    if (!field) return;
+    pendingLinkedFieldRef.current = null;
+    requestAnimationFrame(() => {
+      const target = formRef.current?.querySelector<HTMLElement>(`#${field}`);
+      target?.focus();
+      target?.scrollIntoView({ block: 'center' });
+    });
+    setSearchParams((params) => {
+      params.delete('field');
+      return params;
+    }, { replace: true, resetScroll: false });
+  }, [setSearchParams]);
 
   // Submit with errors: go to the earliest tab with one, where the field shows its message
   const handleInvalid: SubmitErrorHandler<FormValues> = (errors) => {
