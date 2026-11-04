@@ -63,6 +63,7 @@ const Communicon = () => {
     markContactConfirmed,
     loadOwnedBusinessContact,
     checkVerificationAgain,
+    activePickerId,
     isValidatingConversation,
     conversationValidated,
     validateConversation,
@@ -322,6 +323,7 @@ const Communicon = () => {
             onSendContactOTP={sendContactOTP}
             onVerifyContactOTP={verifyContactOTP}
             onCheckVerificationAgain={checkVerificationAgain}
+            activePickerId={activePickerId}
           />
         )}
       </div>

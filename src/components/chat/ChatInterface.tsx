@@ -45,6 +45,8 @@ interface ChatInterfaceProps {
   onVerifyContactOTP?: (email: string, otp: string, businessId: number) => Promise<ContactOTPResult>;
   /** Re-runs verification for a result card's business */
   onCheckVerificationAgain?: (businessId: number, businessName: string, messageId: number) => Promise<void>;
+  /** The business question the flow is waiting on; other pickers in the chat are disabled */
+  activePickerId?: number | null;
 }
 
 const QUICK_REPLIES = [
@@ -65,6 +67,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   onSendContactOTP,
   onVerifyContactOTP,
   onCheckVerificationAgain,
+  activePickerId = null,
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -158,22 +161,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     ranQuickActionRef.current = false;
   };
 
-  const renderBusinessSelectionButtons = (msg: any) => {
-    if (msg.sender === 'business-selection') {
-      const businesses = msg.businesses || [];
-      if (businesses.length === 0) return null;
-      return (
-        <BusinessSelectionButtons
-          businesses={businesses}
-          onBusinessSelect={(business) => {
-            if (window.handleBusinessSelection) {
-              window.handleBusinessSelection(business);
-            }
-          }}
-        />
-      );
-    }
-    return null;
+  // A question's business buttons, inside its bubble; tappable only while the flow waits on it
+  const businessButtonsFor = (msg: ChatInterfaceProps['messages'][number]) => {
+    const businesses = msg.businesses ?? [];
+    if (msg.sender !== 'business-selection' || businesses.length === 0) return undefined;
+    return (
+      <BusinessSelectionButtons
+        businesses={businesses}
+        disabled={msg.id !== activePickerId}
+        onBusinessSelect={(business) => {
+          if (window.handleBusinessSelection) {
+            window.handleBusinessSelection(business);
+          }
+        }}
+      />
+    );
   };
 
   // Show only the latest user message and all non-user messages aren't necessary;
@@ -214,7 +216,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             text={msg.text}
                             sender={msg.sender}
                             timestamp={msg.timestamp}
-                          />
+                          >
+                            {businessButtonsFor(msg)}
+                          </ChatMessage>
                         )}
                         {msg.verificationMetrics && isOlderCard(msg) && (
                           <div className={msg.text ? 'mt-2' : undefined}>
@@ -236,10 +240,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                               onCheckAgain={checkAgainFor(msg.verificationMetrics, msg.id)}
                               animate={msg.animateVerification ?? false}
                             />
-                            {!msg.text && !msg.verificationMetrics.checkedAt && <p className="mt-1 text-xs text-muted-foreground">{msg.timestamp}</p>}
+                            {!msg.text && !msg.verificationMetrics.checkedAt && !msg.verificationMetrics.pending && <p className="mt-1 text-xs text-muted-foreground">{msg.timestamp}</p>}
                           </div>
                         )}
-                        {renderBusinessSelectionButtons(msg)}
                       </div>
                     ))}
 

@@ -158,8 +158,8 @@ test.describe('375x812', () => {
     await openSheet(page);
     await sheet(page).getByRole('button', { name: /Check verification status/ }).tap();
     await expect(sheet(page)).toHaveCount(0);
-    await expect(page.getByText('Select your business:')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Harbour Light Coffee/ })).toBeVisible();
+    // One business: the check starts straight away
+    await expect(page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' })).toBeVisible();
   });
 
   test('+ → "Message a business" switches to the Messages tab', async ({ page }) => {
