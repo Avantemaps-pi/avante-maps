@@ -1,11 +1,18 @@
-import React, { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { getSessionUserId } from '@/lib/sessionUserId';
-import { useAuth } from '@/context/auth';
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { format } from 'date-fns';
+import { RefreshCw } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { RefreshCw, Receipt } from 'lucide-react';
+import { TIERS } from '@/components/pricing/pricingTiers';
+import { useAuth } from '@/context/auth';
+import { supabase } from '@/integrations/supabase/client';
+import { Link } from '@/lib/router-compat';
+import { getSessionUserId } from '@/lib/sessionUserId';
+import { cn } from '@/lib/utils';
+
+export const WALLET_ACTIVITY_QUERY_KEY = 'wallet-activity';
+
+const PAGE_SIZE = 10;
 
 interface PaymentStatusJson {
   approved?: boolean;
@@ -16,168 +23,226 @@ interface PaymentStatusJson {
   error?: string;
 }
 
+interface PaymentMetadata {
+  kind?: string;
+  subscriptionTier?: string;
+}
+
 interface PaymentRow {
   id: number;
-  payment_id: string;
   amount: number;
+  approved_amount_pi: number | null;
   memo: string | null;
-  txid: string | null;
   status: PaymentStatusJson | null;
+  metadata: PaymentMetadata | null;
   created_at: string | null;
-  updated_at: string | null;
 }
 
-type Variant = 'default' | 'secondary' | 'destructive' | 'outline';
-
-function deriveStateLabel(status: PaymentStatusJson | null): { label: string; variant: Variant } {
-  if (!status) return { label: 'Pending', variant: 'secondary' };
-  if (status.completed) return { label: 'Completed', variant: 'default' };
-  if (status.cancelled) return { label: 'Cancelled', variant: 'destructive' };
-  if (status.voided) return { label: 'Voided', variant: 'destructive' };
-  if (status.error) return { label: 'Error', variant: 'destructive' };
-  if (status.approved) return { label: 'Approved', variant: 'secondary' };
-  if (status.verified) return { label: 'Verified', variant: 'secondary' };
-  return { label: 'Pending', variant: 'outline' };
+interface LedgerRow {
+  id: number;
+  amount_pi: number;
+  reference_id: string | null;
+  created_at: string;
 }
 
-function formatTime(ts: string | null): string {
-  if (!ts) return '—';
-  try {
-    return new Date(ts).toLocaleString();
-  } catch {
-    return ts;
+interface ActivityItem {
+  key: string;
+  label: string;
+  /** What comes before the status in the row's meta line */
+  meta: string[];
+  status: string | null;
+  statusIsBad: boolean;
+  amount: string;
+  amountClass: string;
+  needsSupport: boolean;
+  sortTime: number;
+}
+
+const planLabel = (tierId: string | undefined) => {
+  const name = TIERS.find(({ id }) => id === tierId)?.name;
+  return name ? `${name} plan` : 'Plan';
+};
+
+const formatDate = (ts: string | null) => {
+  const date = ts ? new Date(ts) : null;
+  return date && !Number.isNaN(date.getTime()) ? format(date, 'd MMM') : '—';
+};
+
+const sortTime = (ts: string | null) => {
+  const time = ts ? new Date(ts).getTime() : 0;
+  return Number.isNaN(time) ? 0 : time;
+};
+
+function deriveStatus(status: PaymentStatusJson | null): { label: string; bad: boolean; moneyFailed: boolean; needsSupport: boolean } {
+  const failed = (label: string) => ({ label, bad: true, moneyFailed: true, needsSupport: false });
+  // The Pi moved, so this one isn't a failed payment: its amount stays the normal colour
+  if (status?.completed && status.error === 'plan_not_activated') {
+    return { label: 'Paid · plan not activated', bad: true, moneyFailed: false, needsSupport: true };
   }
+  if (status?.completed) return { label: 'Completed', bad: false, moneyFailed: false, needsSupport: false };
+  if (status?.cancelled) return failed(status.error === 'amount_mismatch' ? 'Cancelled · price changed' : 'Cancelled');
+  if (status?.voided) return failed('Voided');
+  if (status?.error) return failed('Error');
+  return { label: 'Pending', bad: false, moneyFailed: false, needsSupport: false };
 }
 
-const PAGE_SIZE = 10;
+function paymentToItem(row: PaymentRow): ActivityItem {
+  const state = deriveStatus(row.status);
+  const isTopUp = row.metadata?.kind === 'wallet_topup';
+  const tier = row.metadata?.subscriptionTier;
+  let label: string;
+  let type: string | null = null;
+  if (isTopUp) {
+    label = 'Top up';
+  } else if (tier) {
+    label = planLabel(tier);
+    type = 'Plan';
+  } else if (row.metadata?.kind === 'message_fee') {
+    label = 'Message fee';
+  } else if (row.memo) {
+    label = row.memo;
+    type = 'Payment';
+  } else {
+    label = 'Payment';
+  }
+  // A plan's real amount is what Pi reported at approval. amount is what the client sent
+  const amount = Number(row.approved_amount_pi ?? row.amount).toFixed(2);
+  return {
+    key: `payment-${row.id}`,
+    label,
+    meta: [...(type ? [type] : []), formatDate(row.created_at)],
+    status: state.label,
+    statusIsBad: state.bad,
+    amount: `${isTopUp ? '+' : '−'} ${amount} π`,
+    amountClass: state.moneyFailed ? 'text-destructive' : isTopUp ? 'text-primary' : 'text-foreground',
+    needsSupport: state.needsSupport,
+    sortTime: sortTime(row.created_at),
+  };
+}
+
+function ledgerToItem(row: LedgerRow): ActivityItem {
+  const isPlan = row.reference_id?.startsWith('plan:') ?? false;
+  return {
+    key: `ledger-${row.id}`,
+    label: isPlan ? planLabel(row.reference_id?.split(':')[1]) : 'Payment from balance',
+    meta: isPlan ? ['Plan', 'Paid from balance', formatDate(row.created_at)] : [formatDate(row.created_at)],
+    status: null,
+    statusIsBad: false,
+    amount: `− ${Math.abs(Number(row.amount_pi)).toFixed(2)} π`,
+    amountClass: 'text-foreground',
+    needsSupport: false,
+    sortTime: sortTime(row.created_at),
+  };
+}
+
+// null when there's no session
+const fetchActivity = async (): Promise<ActivityItem[] | null> => {
+  // RLS checks user_id = auth.uid(); user.uid can be the Pi ID or stale.
+  const userId = await getSessionUserId();
+  if (!userId) return null;
+
+  const [payments, ledger] = await Promise.all([
+    supabase
+      .from('payments')
+      .select('id, amount, approved_amount_pi, memo, status, metadata, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(PAGE_SIZE),
+    // Only spends: a top up's credit already shows from payments. The user filter matters here,
+    // because this table's policy lets an admin read everyone's rows
+    supabase
+      .from('wallet_ledger')
+      .select('id, amount_pi, reference_id, created_at')
+      .eq('user_id', userId)
+      .lt('amount_pi', 0)
+      .order('created_at', { ascending: false })
+      .limit(PAGE_SIZE),
+  ]);
+  if (payments.error) throw payments.error;
+  if (ledger.error) throw ledger.error;
+
+  // approved_amount_pi is newer than the generated Supabase types
+  const paymentRows = (payments.data ?? []) as unknown as PaymentRow[];
+  return [...paymentRows.map(paymentToItem), ...((ledger.data ?? []) as LedgerRow[]).map(ledgerToItem)]
+    .sort((a, b) => b.sortTime - a.sortTime)
+    .slice(0, PAGE_SIZE);
+};
 
 const PaymentHistory: React.FC = () => {
   const { user } = useAuth();
-  const [rows, setRows] = useState<PaymentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [hasSession, setHasSession] = useState(true);
+  const { data: items, isLoading, isFetching, isError, error, refetch } = useQuery({
+    queryKey: [WALLET_ACTIVITY_QUERY_KEY, user?.uid],
+    queryFn: fetchActivity,
+    enabled: !!user?.uid,
+    retry: false,
+  });
 
-  const load = async () => {
-    if (!user?.uid) return;
-    setLoading(true);
-    setError(null);
-    // RLS checks user_id = auth.uid(); user.uid can be the Pi ID or stale.
-    const userId = await getSessionUserId();
-    if (!userId) {
-      setHasSession(false);
-      setRows([]);
-      setLoading(false);
-      return;
-    }
-    setHasSession(true);
-    const { data, error: dbError } = await supabase
-      .from('payments')
-      .select('id, payment_id, amount, memo, txid, status, created_at, updated_at')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(PAGE_SIZE);
-
-    if (dbError) {
-      setError(dbError.message);
-      setRows([]);
-    } else {
-      setRows((data || []) as PaymentRow[]);
-    }
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.uid]);
-
-  if (!user?.uid || !hasSession) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Sign in to view your payment history.
-      </p>
-    );
+  if (!user?.uid || items === null) {
+    return <p className="text-sm text-muted-foreground">Sign in to view your payment history.</p>;
   }
 
   return (
-    <div className="space-y-3">
+    <section aria-labelledby="activity-heading" className="space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-xs sm:text-sm text-muted-foreground">
-          Showing your {PAGE_SIZE} most recent payments.
-        </p>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={load}
-          disabled={loading}
-          className="h-8 px-2"
+        <h2 id="activity-heading" className="text-base font-semibold">Recent activity</h2>
+        <button
+          type="button"
+          aria-label="Refresh activity"
+          onClick={() => void refetch()}
+          className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          <span className="ml-1 text-xs">Refresh</span>
-        </Button>
+          <RefreshCw className={cn('h-5 w-5', isFetching && 'animate-spin')} aria-hidden="true" />
+        </button>
       </div>
 
-      {loading && rows.length === 0 ? (
-        <div className="space-y-2">
+      {isLoading ? (
+        <div className="space-y-2" data-testid="activity-loading">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-md" />
+            <Skeleton key={i} className="h-[60px] w-full rounded-xl" />
           ))}
         </div>
-      ) : error ? (
-        <p className="text-sm text-destructive">Failed to load payments: {error}</p>
-      ) : rows.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border px-4 py-10 text-center">
-          <div className="flex h-24 w-24 items-center justify-center rounded-full bg-primary/10">
-            <Receipt className="h-12 w-12 text-primary" />
-          </div>
-          <h3 className="text-base font-semibold text-foreground">No transactions yet</h3>
-          <p className="max-w-xs text-sm text-muted-foreground">
-            Your Pi payments to and from businesses will appear here.
-          </p>
+      ) : isError ? (
+        <p role="alert" className="rounded-xl border bg-card px-5 py-6 text-center text-sm text-destructive">
+          Failed to load activity: {error instanceof Error ? error.message : 'please try again.'}
+        </p>
+      ) : !items?.length ? (
+        <div className="rounded-xl border bg-card px-5 py-6 text-center text-card-foreground">
+          <h3 className="text-[15px] font-semibold">No activity yet</h3>
+          <p className="mt-1.5 text-sm text-muted-foreground">Top ups and plan payments will show here.</p>
         </div>
       ) : (
-        <ul className="divide-y divide-border rounded-md border">
-          {rows.map((row) => {
-            const state = deriveStateLabel(row.status);
-            return (
-              <li
-                key={row.id}
-                className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Badge variant={state.variant} className="text-xs uppercase">
-                      {state.label}
-                    </Badge>
-                    <span className="font-medium tabular-nums">
-                      {Number(row.amount).toFixed(4)} π
-                    </span>
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {row.memo || 'Pi payment'}
-                  </p>
-                  <p className="truncate font-mono text-xs text-muted-foreground">
-                    {row.payment_id}
-                    {row.txid ? ` · tx ${row.txid.slice(0, 10)}…` : ''}
-                  </p>
-                </div>
-                <div className="text-left sm:text-right">
-                  <p className="text-xs text-muted-foreground">
-                    Created {formatTime(row.created_at)}
-                  </p>
-                  {row.updated_at && row.updated_at !== row.created_at && (
+        <>
+          <ul className="divide-y divide-border rounded-xl border bg-card text-card-foreground">
+            {items.map((item) => (
+              <li key={item.key} className="px-3 py-2">
+                <div className="flex min-h-11 items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="break-words text-sm font-semibold">{item.label}</p>
                     <p className="text-xs text-muted-foreground">
-                      Updated {formatTime(row.updated_at)}
+                      {item.meta.join(' · ')}
+                      {item.status && (
+                        <>
+                          {' · '}
+                          <span className={cn(item.statusIsBad && 'text-destructive')}>{item.status}</span>
+                        </>
+                      )}
                     </p>
-                  )}
+                  </div>
+                  <p className={cn('shrink-0 text-sm font-semibold tabular-nums', item.amountClass)}>{item.amount}</p>
                 </div>
+                {item.needsSupport && (
+                  <p className="text-xs text-muted-foreground">
+                    <Link to="/contact" className="inline-flex min-h-11 items-center font-medium text-primary underline">Contact support</Link>
+                    {' and we\'ll sort it out.'}
+                  </p>
+                )}
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+          <p className="text-xs text-muted-foreground">Your 10 most recent payments.</p>
+        </>
       )}
-    </div>
+    </section>
   );
 };
 
