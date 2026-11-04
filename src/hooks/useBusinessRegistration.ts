@@ -11,6 +11,7 @@ import type { BusinessInsertPayload } from '@/types/businessPayload';
 import { useImageUpload } from '@/hooks/useImageUpload';
 import { getBusinessLimit } from '@/hooks/useBusinessLimit';
 import { getSupabaseFunctionsUrl } from '@/config/supabase';
+import { formatFullAddress, geocodeAddress } from '@/components/business/registration/utils/addressUtils';
 
 export const useBusinessRegistration = (onSuccess?: () => void) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -72,29 +73,6 @@ export const useBusinessRegistration = (onSuccess?: () => void) => {
       sundayClosed: false,
     },
   });
-
-  // ---------------------------
-  // GEOCODE FUNCTION
-  // ---------------------------
-  const geocodeAddress = async (address: string) => {
-    try {
-      const { data, error } = await supabase.functions.invoke('geocode-address', {
-        body: { address }
-      });
-      if (error) {
-        console.error('Error geocoding address:', error);
-        return null;
-      }
-      if (data?.suggestions?.length > 0) {
-        const firstResult = data.suggestions[0];
-        return { lat: firstResult.lat, lng: firstResult.lon, address_components: firstResult.address };
-      }
-      return null;
-    } catch (err) {
-      console.error('Geocode error:', err);
-      return null;
-    }
-  };
 
   // ---------------------------
   // FORM SUBMISSION
@@ -172,7 +150,7 @@ export const useBusinessRegistration = (onSuccess?: () => void) => {
       }
 
       // ✅ Geocode address and verify
-      const fullAddress = `${values.streetAddress}${values.apartment ? `, ${values.apartment}` : ''}, ${values.city}, ${values.state}, ${values.zipCode}, ${values.country}`;
+      const fullAddress = formatFullAddress(values);
       const geocodedData = await geocodeAddress(fullAddress);
       if (!geocodedData?.lat || !geocodedData?.lng) {
         toast.error('Address could not be located.');
