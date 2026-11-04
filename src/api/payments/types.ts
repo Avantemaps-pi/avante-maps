@@ -21,6 +21,8 @@ export interface PaymentResponse {
   lifecycleId?: string;
   /** Backwards-compatible alias for lifecycleId. */
   correlationId?: string;
+  /** Why the server refused, when it says: amount_mismatch, plan_not_activated */
+  error_code?: string;
   /** Canonical terminal outcome when known. */
   terminalReason?: 'completed' | 'cancelled' | 'voided' | 'error' | 'timeout' | null;
 }

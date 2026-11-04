@@ -1,15 +1,13 @@
 
 import { useState, useCallback } from 'react';
 import { useAuth } from '@/context/auth';
-import {
-  executeSubscriptionPayment,
-  getSubscriptionPrice
-} from '@/utils/piPayment';
+import { executeSubscriptionPayment } from '@/utils/piPayment';
 import { approvePayment } from '@/api/payments';
 import { SubscriptionTier } from '@/utils/piNetwork';
 import { toast } from 'sonner';
 import { withPiErrorHandling } from '@/utils/piPayment/piErrorHandler';
 import { usePaymentStatusPolling } from '@/hooks/usePaymentStatusPolling';
+import { TIERS } from './pricingTiers';
 
 // TODO(PiRC2): When the Pi Network PiRC2 subscription contract ships and
 // `FEATURE_FLAGS.pirc2Subscriptions` is enabled, route monthly renewals
@@ -80,8 +78,10 @@ export const useSubscriptionPayment = () => {
     return true;
   };
 
-  const handleSubscribe = async (tier: string) => {
-    if (!(await prepareCheckout(tier))) return;
+  // Returns 'amount_mismatch' when the price had moved and nothing was charged: the caller offers
+  // the plan again at the new price
+  const handleSubscribe = async (tier: string, amountPi: number): Promise<'amount_mismatch' | undefined> => {
+    if (!(await prepareCheckout(tier))) return undefined;
 
     setIsProcessingPayment(true);
     polling.reset();
@@ -91,7 +91,7 @@ export const useSubscriptionPayment = () => {
       await refreshUserData();
 
       const subscriptionTier = tier as SubscriptionTier;
-      const price = getSubscriptionPrice(subscriptionTier, selectedFrequency);
+      const planName = TIERS.find(({ id }) => id === tier)?.name;
 
       // Execute the payment using the Pi Network flow with error handling.
       // Start polling as soon as we have a paymentId so we can react to
@@ -99,13 +99,14 @@ export const useSubscriptionPayment = () => {
       // even if the SDK callback path is delayed or duplicated.
       const result = await withPiErrorHandling(async () => {
         return await executeSubscriptionPayment(
-          price,
+          amountPi,
           subscriptionTier,
           selectedFrequency as 'monthly' | 'yearly',
           {
             onPaymentId: (paymentId) => {
               polling.start(paymentId);
             },
+            ...(planName !== undefined ? { planName } : {}),
           }
         );
       });
@@ -116,6 +117,15 @@ export const useSubscriptionPayment = () => {
           console.log("Payment successful, refreshing user data...");
           await refreshUserData();
         }
+      } else if (result?.errorCode === 'amount_mismatch') {
+        // Cancelled before the user signed, so the banner's "cancelled" has nothing to add
+        polling.reset();
+        toast.error("The price changed. Please try again.");
+        return 'amount_mismatch';
+      } else if (result?.errorCode === 'plan_not_activated') {
+        // The row is completed, so the poller would show "your subscription is active"
+        polling.reset();
+        toast.error(result.message);
       } else if (result) {
         // Handle specific error cases
         if (result.message.includes("permission not granted")) {
@@ -154,6 +164,7 @@ export const useSubscriptionPayment = () => {
     } finally {
       setIsProcessingPayment(false);
     }
+    return undefined;
   };
 
   const handleCleanupPayments = async () => {

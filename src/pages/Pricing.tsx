@@ -85,9 +85,12 @@ const Pricing = () => {
     setCheckoutOpen(true);
   };
 
-  const handlePayWithPi = (tierId: string) => {
+  const handlePayWithPi = async (tierId: string, amountPi: number) => {
     lastAttemptedTier.current = tierId;
-    handleSubscribe(tierId);
+    if ((await handleSubscribe(tierId, amountPi)) === 'amount_mismatch') {
+      setCheckoutTier(tierId);
+      setCheckoutOpen(true);
+    }
   };
 
   // Focus returns to the plan's button, also on browsers where a tap doesn't focus it
@@ -127,7 +130,8 @@ const Pricing = () => {
       />
       <PaymentOutcomeBanner
         isPolling={paymentPolling.isPolling}
-        isTerminal={paymentPolling.isTerminal}
+        // The row says completed before the plan is activated: no outcome until the payment has finished
+        isTerminal={paymentPolling.isTerminal && !isProcessingPayment}
         terminalReason={paymentPolling.terminalReason}
         paymentId={paymentPolling.paymentId}
         retryDisabled={isPaymentLocked}
@@ -135,7 +139,7 @@ const Pricing = () => {
           ? {
               onRetry: () => {
                 paymentPolling.reset();
-                handleSubscribe(lastAttemptedTier.current!);
+                handlePaidPlanClick(lastAttemptedTier.current!);
               },
             }
           : {})}

@@ -24,8 +24,8 @@ interface PlanCheckoutSheetProps {
   tierId: string | null;
   /** The Pricing page's frequency: 'monthly' or 'yearly' */
   frequency: string;
-  /** "Continue in Pi Wallet": the sheet closes, then the existing Pi payment starts */
-  onPayWithPi: (tierId: string) => void;
+  /** "Continue in Pi Wallet": the sheet closes, then the Pi payment starts for the amount shown */
+  onPayWithPi: (tierId: string, amountPi: number) => void;
   /** Where focus goes when the sheet closes (the plan's button) */
   onCloseAutoFocus?: (event: Event) => void;
 }
@@ -41,7 +41,7 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
   const queryClient = useQueryClient();
   const { refreshUserData } = useAuth();
   const { balance, isLoading: isBalanceLoading, isError: isBalanceError, refetch: refetchBalance } = useWalletBalance();
-  const { convertUsdToPi, error: piPriceError } = usePiPrice();
+  const { convertUsdToPi, convertUsdToPiRoundedUp, isLoading: isPriceLoading, error: piPriceError, refresh: refreshPrice } = usePiPrice();
   const [choice, setChoice] = useState<PayMethod | null>(null);
   const [isPaying, setIsPaying] = useState(false);
   // One id per attempt at a plan, kept when the sheet is closed and reopened: if a response is lost,
@@ -52,20 +52,27 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
     if (!open) return;
     setChoice(null);
     refetchBalance();
-  }, [open, refetchBalance]);
+    refreshPrice();
+  }, [open, refetchBalance, refreshPrice]);
 
   const tier = TIERS.find(({ id }) => id === tierId);
   const isYearly = frequency === 'yearly';
   const usd = tier ? tier.price[isYearly ? 'yearly' : 'monthly'] : null;
-  const piAmount = typeof usd === 'number' ? convertUsdToPi(usd) : null;
-  const price = piAmount === null ? null : Number(piAmount);
+  const balanceAmount = typeof usd === 'number' ? convertUsdToPi(usd) : null;
+  const piWalletAmount = typeof usd === 'number' ? convertUsdToPiRoundedUp(usd) : null;
+  const price = balanceAmount === null ? null : Number(balanceAmount);
 
-  // usePiPrice falls back to a made-up rate when pi_price can't be read, and the server charges the
-  // real one, so don't offer to pay from the balance with an amount that may be wrong
-  const balanceUnavailable = !isBalanceLoading && (isBalanceError || !!piPriceError || price === null);
-  const hasEnough = !isBalanceLoading && !balanceUnavailable && price !== null && balance >= price;
-  const notEnough = !isBalanceLoading && !balanceUnavailable && !hasEnough;
-  const method: PayMethod = hasEnough ? (choice ?? 'balance') : 'pi';
+  // usePiPrice falls back to a made-up rate when pi_price can't be read, and the server checks the
+  // real one, so neither payment is offered with an amount that may be wrong
+  const priceUnavailable = !isPriceLoading && (!!piPriceError || price === null);
+  const priceReady = !isPriceLoading && !priceUnavailable;
+  const isBalanceRowLoading = isBalanceLoading || isPriceLoading;
+  const balanceUnavailable = !isBalanceRowLoading && (isBalanceError || priceUnavailable);
+  const hasEnough = !isBalanceRowLoading && !balanceUnavailable && price !== null && balance >= price;
+  const notEnough = !isBalanceRowLoading && !balanceUnavailable && !hasEnough;
+  const method: PayMethod | null = priceUnavailable ? null : hasEnough ? (choice ?? 'balance') : 'pi';
+  // The server charges the balance to the nearest 0.01 π. A Pi payment is rounded up
+  const amountShown = !priceReady ? null : method === 'balance' ? balanceAmount : piWalletAmount;
 
   const handleOpenChange = (next: boolean) => {
     if (!next && isPaying) return;
@@ -105,9 +112,9 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
     if (!tier) return;
     if (method === 'balance') {
       payWithBalance();
-    } else {
+    } else if (method === 'pi' && piWalletAmount !== null) {
       onOpenChange(false);
-      onPayWithPi(tier.id);
+      onPayWithPi(tier.id, Number(piWalletAmount));
     }
   };
 
@@ -125,7 +132,7 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
           <div>
             <SheetTitle className="text-lg font-bold text-foreground">{tier?.name} plan</SheetTitle>
             <SheetDescription className="text-sm text-muted-foreground">
-              ${typeof usd === 'number' ? usd.toFixed(2) : ''} a {isYearly ? 'year' : 'month'} · {piAmount ?? '…'} π today
+              ${typeof usd === 'number' ? usd.toFixed(2) : ''} a {isYearly ? 'year' : 'month'} · {amountShown ?? '…'} π today
             </SheetDescription>
           </div>
           <SheetClose
@@ -150,7 +157,7 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
             />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="text-[15px] font-semibold">Avante Maps balance</span>
-              {isBalanceLoading ? (
+              {isBalanceRowLoading ? (
                 <Skeleton data-testid="balance-skeleton" className="mt-1 h-4 w-44" />
               ) : (
                 <span className="text-[13px] text-muted-foreground">
@@ -166,24 +173,27 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
               Top up your balance
             </Link>
           )}
-          <label className={rowClass(method === 'pi')}>
+          <label className={cn(rowClass(method === 'pi'), priceUnavailable && 'opacity-60')}>
             <input
               type="radio"
               name="pay-with"
               checked={method === 'pi'}
+              disabled={priceUnavailable}
               onChange={() => setChoice('pi')}
               className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
             />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="text-[15px] font-semibold">Pi Wallet</span>
-              <span className="text-[13px] text-muted-foreground">Approve the payment in the Pi Wallet app</span>
+              <span className="text-[13px] text-muted-foreground">
+                {priceUnavailable ? 'Price unavailable right now. Try again in a minute.' : 'Approve the payment in the Pi Wallet app'}
+              </span>
             </span>
           </label>
         </fieldset>
 
-        <Button type="button" className="h-11 w-full" disabled={isPaying} onClick={handleContinue}>
+        <Button type="button" className="h-11 w-full" disabled={isPaying || !priceReady} onClick={handleContinue}>
           {isPaying && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
-          {method === 'balance' ? `Pay ${piAmount} π from balance` : 'Continue in Pi Wallet'}
+          {method === 'balance' ? `Pay ${balanceAmount} π from balance` : 'Continue in Pi Wallet'}
         </Button>
         <p className="text-center text-xs text-muted-foreground">Covers 1 {isYearly ? 'year' : 'month'} from today.</p>
       </SheetContent>

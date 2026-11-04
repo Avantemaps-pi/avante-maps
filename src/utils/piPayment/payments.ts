@@ -31,6 +31,8 @@ export interface PaymentResult {
   message: string;
   shouldRefreshUser?: boolean;
   paymentId?: string;
+  /** Why the server refused, when it says: amount_mismatch, plan_not_activated */
+  errorCode?: string;
 }
 
 /**
@@ -79,10 +81,10 @@ export async function startPayment(
  * Rationale and migration plan: docs/pirc2-integration.md
  */
 export async function executeSubscriptionPayment(
-  amount: number,
+  amountPi: number,
   tier: string,
   frequency: 'monthly' | 'yearly',
-  hooks?: { onPaymentId?: (paymentId: string) => void }
+  hooks?: { onPaymentId?: (paymentId: string) => void; planName?: string }
 ): Promise<PaymentResult> {
   if (paymentInProgress) {
     return {
@@ -122,7 +124,7 @@ export async function executeSubscriptionPayment(
     }
 
     const normalizedFrequency = frequency === 'yearly' ? 'annual' : frequency;
-    const memo = `${tier} subscription (${frequency})`;
+    const memo = `${hooks?.planName ?? tier} plan (${frequency})`;
     const metadata = {
       subscriptionTier: tier,
       frequency: normalizedFrequency,
@@ -161,13 +163,21 @@ export async function executeSubscriptionPayment(
           try {
             hooks?.onPaymentId?.(paymentId);
             const approvalResult = await approvePayment(
-              { paymentId, userId: supabaseUserId, amount, memo, metadata },
+              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata },
               { lifecycleId }
             );
             lcEmit('info', `${FN_LC}.approve.result`, 'pi_api', {
               paymentId,
               success: approvalResult.success,
             });
+            if (!approvalResult.success) {
+              resolve({
+                success: false,
+                message: approvalResult.message,
+                paymentId,
+                ...(approvalResult.error_code ? { errorCode: approvalResult.error_code } : {}),
+              });
+            }
           } catch (error) {
             lcEmit('error', `${FN_LC}.approve.exception`, 'error', {
               paymentId,
@@ -184,7 +194,7 @@ export async function executeSubscriptionPayment(
           lcEmit('info', `${FN_LC}.complete.start`, 'pi_api', { paymentId, txid });
           try {
             const completionResult = await completePayment(
-              { paymentId, userId: supabaseUserId, amount, memo, metadata, txid },
+              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, txid },
               { lifecycleId }
             );
             lcEmit('info', `${FN_LC}.complete.result`, 'pi_api', {
@@ -193,6 +203,15 @@ export async function executeSubscriptionPayment(
               success: completionResult.success,
               terminalReason: completionResult.success ? 'completed' : 'error',
             });
+            if (!completionResult.success) {
+              resolve({
+                success: false,
+                message: completionResult.message,
+                paymentId,
+                ...(completionResult.error_code ? { errorCode: completionResult.error_code } : {}),
+              });
+              return;
+            }
             resolve({
               success: true,
               message: `Successfully subscribed to ${tier} plan!`,
@@ -234,7 +253,7 @@ export async function executeSubscriptionPayment(
         },
       };
 
-      createPiPayment({ amount, memo, metadata }, callbacks)
+      createPiPayment({ amount: amountPi, memo, metadata }, callbacks)
         .catch((error) => {
           console.error('Failed to create payment:', error);
           resolve({
