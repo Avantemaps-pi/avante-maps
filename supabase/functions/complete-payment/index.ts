@@ -2,7 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 import { createPaymentNotification } from '../_shared/notifications.ts';
-import { getExpectedPlanPi } from '../_shared/prices.ts';
+import { AMOUNT_TOLERANCE, getExpectedPlanPi } from '../_shared/prices.ts';
 import {
   getOrCreateLifecycleId,
   makeLogger,
@@ -10,6 +10,12 @@ import {
 } from '../_shared/logger.ts';
 
 const FN = 'complete-payment';
+
+const PLAN_NOT_ACTIVATED = {
+  success: false,
+  error_code: 'plan_not_activated',
+  message: 'Payment received, but your plan could not be activated. Please contact support.',
+};
 
 const PaymentRequestSchema = z.object({
   paymentId: z.string()
@@ -110,7 +116,7 @@ Deno.serve(async (req) => {
 
     const { data: existingPayment, error: lookupError } = await supabaseClient
       .from('payments')
-      .select('user_id, txid, status')
+      .select('user_id, txid, status, metadata, approved_amount_pi')
       .eq('payment_id', paymentRequest.paymentId)
       .maybeSingle();
 
@@ -147,6 +153,15 @@ Deno.serve(async (req) => {
           success: false,
           message: 'Transaction ID mismatch on completed payment',
         }, 409);
+      }
+      // A retry mustn't report success for a payment that never got its plan
+      if (existingPayment.status.error === 'plan_not_activated') {
+        log.error(`${FN}.terminal.plan_not_activated`, { stage: 'transition' });
+        return respond({
+          ...PLAN_NOT_ACTIVATED,
+          paymentId: paymentRequest.paymentId,
+          txid: existingPayment.txid ?? paymentRequest.txid,
+        }, 500);
       }
       log.info(`${FN}.terminal.idempotent`, { stage: 'transition', terminalReason: 'completed' });
       return respond({
@@ -352,30 +367,54 @@ Deno.serve(async (req) => {
         });
       }
 
-      // 0.5% tolerance to accommodate FX rounding at price-conversion time.
-      const AMOUNT_TOLERANCE = 0.995;
-
       if (paymentRequest.metadata?.subscriptionTier) {
         const tier = paymentRequest.metadata.subscriptionTier;
         const freq = paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly';
-        const expected = await getExpectedPlanPi(supabaseClient, tier, freq);
-        if (!expected.ok && expected.error === 'invalid_tier') {
-          log.error(`${FN}.verify.unknown_tier`, { stage: 'verify', tier, freq });
-          return respond({ success: false, message: 'Invalid subscription tier' }, 400);
-        }
-        if (!expected.ok) {
-          log.error(`${FN}.verify.pi_price_unavailable`, { stage: 'verify' });
-          return respond({ success: false, message: 'Price service unavailable' }, 503);
-        }
-        const { expectedPi } = expected;
-        if (verifiedPiAmount < expectedPi * AMOUNT_TOLERANCE) {
-          log.error(`${FN}.verify.subscription_amount_mismatch`, {
-            stage: 'verify', tier, freq, expectedPi, verifiedPiAmount,
-          });
-          return respond({
-            success: false,
-            message: 'Payment amount does not match subscription price',
-          }, 400);
+        if (existingPayment?.approved_amount_pi != null) {
+          // Checked against the price at approval, so a price move since can't refuse a payment
+          // the user has signed. That amount only covers the plan it was approved for
+          const approvedTier = existingPayment.metadata?.subscriptionTier;
+          const approvedFreq = existingPayment.metadata?.frequency === 'annual' ? 'annual' : 'monthly';
+          if (tier !== approvedTier || freq !== approvedFreq) {
+            log.error(`${FN}.verify.plan_not_approved`, {
+              stage: 'validation', tier, freq, approvedTier, approvedFreq,
+            });
+            return respond({
+              success: false,
+              message: 'Payment does not match the plan that was approved',
+            }, 400);
+          }
+          const approvedPi = Number(existingPayment.approved_amount_pi);
+          if (verifiedPiAmount < approvedPi * AMOUNT_TOLERANCE) {
+            log.error(`${FN}.verify.subscription_amount_mismatch`, {
+              stage: 'validation', tier, freq, approvedPi, verifiedPiAmount,
+            });
+            return respond({
+              success: false,
+              message: 'Payment amount does not match subscription price',
+            }, 400);
+          }
+        } else {
+          // Payments approved before approved_amount_pi existed
+          const expected = await getExpectedPlanPi(supabaseClient, tier, freq);
+          if (!expected.ok && expected.error === 'invalid_tier') {
+            log.error(`${FN}.verify.unknown_tier`, { stage: 'verify', tier, freq });
+            return respond({ success: false, message: 'Invalid subscription tier' }, 400);
+          }
+          if (!expected.ok) {
+            log.error(`${FN}.verify.pi_price_unavailable`, { stage: 'verify' });
+            return respond({ success: false, message: 'Price service unavailable' }, 503);
+          }
+          const { expectedPi } = expected;
+          if (verifiedPiAmount < expectedPi * AMOUNT_TOLERANCE) {
+            log.error(`${FN}.verify.subscription_amount_mismatch`, {
+              stage: 'verify', tier, freq, expectedPi, verifiedPiAmount,
+            });
+            return respond({
+              success: false,
+              message: 'Payment amount does not match subscription price',
+            }, 400);
+          }
         }
       }
 
@@ -448,6 +487,7 @@ Deno.serve(async (req) => {
 
 
       if (paymentRequest.metadata?.subscriptionTier) {
+        let planError: string | null = null;
         try {
           const { error: subscriptionError } = await supabaseClient.rpc('handle_subscription_after_payment', {
             p_user_id: paymentRequest.userId,
@@ -456,24 +496,39 @@ Deno.serve(async (req) => {
             p_subscription_tier: paymentRequest.metadata.subscriptionTier,
             p_frequency: paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly',
           });
-
-          if (subscriptionError) {
-            log.warn(`${FN}.db_write.subscription_rpc_error`, {
-              stage: 'db_write',
-              message: subscriptionError.message,
-            });
-          } else {
-            log.info(`${FN}.subscription.created`, {
-              stage: 'db_write',
-              tier: paymentRequest.metadata.subscriptionTier,
-            });
-          }
+          if (subscriptionError) planError = subscriptionError.message;
         } catch (subscriptionErr) {
-          log.error(`${FN}.subscription.exception`, {
-            stage: 'error',
-            message: subscriptionErr instanceof Error ? subscriptionErr.message : String(subscriptionErr),
-          });
+          planError = subscriptionErr instanceof Error ? subscriptionErr.message : String(subscriptionErr);
         }
+
+        if (planError !== null) {
+          log.error(`${FN}.subscription.not_activated`, {
+            stage: 'db_write',
+            tier: paymentRequest.metadata.subscriptionTier,
+            message: planError,
+          });
+          // Marked on the row so a retry doesn't report success, and so support can find it
+          await supabaseClient.from('payments').update({
+            status: {
+              approved: true,
+              verified: true,
+              completed: true,
+              cancelled: false,
+              error: 'plan_not_activated',
+            },
+            updated_at: new Date().toISOString(),
+          }).eq('payment_id', paymentRequest.paymentId);
+          return respond({
+            ...PLAN_NOT_ACTIVATED,
+            paymentId: paymentRequest.paymentId,
+            txid: paymentRequest.txid,
+          }, 500);
+        }
+
+        log.info(`${FN}.subscription.created`, {
+          stage: 'db_write',
+          tier: paymentRequest.metadata.subscriptionTier,
+        });
       }
 
       try {
