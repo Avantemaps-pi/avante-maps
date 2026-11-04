@@ -79,7 +79,8 @@ const AppLayout: React.FC<AppLayoutProps> = ({
 
   return (
     <SidebarProvider>
-      <div className={`flex ${fullHeight ? 'min-h-dvh' : 'min-h-screen'} w-full min-w-0 overflow-x-hidden`}>
+      {/* Scrolling pages clip rather than hide: overflow-x-hidden would make this a scroll container, and the sticky header would scroll away */}
+      <div className={`flex ${fullHeight ? 'min-h-dvh overflow-x-hidden' : 'min-h-screen overflow-x-clip'} w-full min-w-0`}>
         {!hideSidebar && <AppSidebar />}
         
         <div className={contentClasses}>

@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { hasInAppHistory } from '@/lib/inAppHistory';
 import { FormProvider } from 'react-hook-form';
 import { Form } from '@/components/ui/form';
 import { Tabs } from '@/components/ui/tabs';
@@ -88,6 +89,15 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
     };
   }, [hasUnsavedChanges, isSubmitting]);
 
+  // Back, or to the list when there's no earlier page in the app (a direct load or a link)
+  const leavePage = () => {
+    if (hasInAppHistory()) {
+      navigate(-1);
+    } else {
+      navigate('/registered-business', { replace: true });
+    }
+  };
+
   const handleDiscardChanges = () => {
     // Reset form to clear dirty state
     form.reset();
@@ -96,7 +106,7 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
     // Close dialog
     setShowUnsavedChangesDialog(false);
     // Navigate back immediately
-    navigate(-1);
+    leavePage();
   };
 
   const handleSubmit = async (values: any) => {
@@ -111,7 +121,7 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
       if (hasUnsavedChanges && !isSubmitting) {
         setShowUnsavedChangesDialog(true);
       } else if (!isSubmitting) {
-        navigate(-1);
+        leavePage();
       }
     }
   }));

@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { useBusinessLimit } from '@/hooks/useBusinessLimit';
 import { AlertTriangle } from 'lucide-react';
 import { secureLog } from '@/utils/secureLogger';
+import { OWNED_BUSINESS_COLUMNS, toOwnedBusiness, type OwnedBusinessRow } from '@/utils/ownedBusiness';
 
 const RegisteredBusiness = () => {
   const navigate = useNavigate();
@@ -85,7 +86,7 @@ const RegisteredBusiness = () => {
         // Use direct Supabase query with RLS (most secure approach)
         const { data, error } = await supabase
           .from('businesses')
-          .select('id, business_name, owner_id, category, business_description, city, country, images, is_verified, is_certified, verification_status, is_active, created_at, lat, lng, business_types, keywords, location, street_address, state, zip_code')
+          .select(OWNED_BUSINESS_COLUMNS)
           .eq('owner_id', sessionUserId)
           .eq('is_active', true)
           .order('created_at', { ascending: false });
@@ -115,43 +116,7 @@ const RegisteredBusiness = () => {
           secureLog.warn('Filtered out invalid businesses', { count: rows.length - validRows.length });
         }
 
-        // Transform to Business type - build address from components
-        const transformedBusinesses: Business[] = validRows.map((b: any) => {
-          const addressParts = [
-            b.street_address,
-            b.city,
-            b.state,
-            b.zip_code,
-            b.country
-          ].filter(Boolean);
-          const address = addressParts.join(', ');
-
-          return {
-            id: b.id,
-            name: b.business_name,
-            address: address || b.location || '',
-            description: b.business_description || '',
-            isCertified: b.is_certified,
-            isVerified: b.is_verified,
-            verificationStatus: b.verification_status,
-            // Extended fields
-            streetAddress: b.street_address,
-            city: b.city,
-            state: b.state,
-            zipCode: b.zip_code,
-            country: b.country,
-            businessTypes: b.business_types,
-            keywords: b.keywords,
-            category: b.category,
-            coordinates: b.coordinates,
-            contactInfo: b.contact_info,
-            hours: b.hours,
-            piWalletAddress: b.pi_wallet_address,
-            images: b.images,
-            lat: b.lat,
-            lng: b.lng,
-          };
-        });
+        const transformedBusinesses = (validRows as OwnedBusinessRow[]).map(toOwnedBusiness);
 
         setBusinesses(transformedBusinesses);
 

@@ -8,6 +8,7 @@ import { containsInappropriateContent } from '@/utils/contentFilter';
 import { useImageUpload } from '@/hooks/useImageUpload';
 import { FormValues } from '@/components/business/registration/formSchema';
 import { Business } from '@/types/business';
+import { secureLog } from '@/utils/secureLogger';
 
 export const useBusinessUpdate = (business: Business, onSuccess?: () => void) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -64,15 +65,29 @@ export const useBusinessUpdate = (business: Business, onSuccess?: () => void) =>
         business_name: values.businessName,
         business_description: values.businessDescription || null,
         business_types: values.businessTypes,
-        pi_wallet_address: values.piWalletAddress || null,
-        contact_info: {
+      };
+
+      // Safety net: a field that was never loaded holds the form's blanks and defaults, not the
+      // business's data, so it isn't saved (undefined only: a loaded, empty value is a real edit)
+      const notLoaded: string[] = [];
+      if (business.piWalletAddress !== undefined) {
+        updatePayload['pi_wallet_address'] = values.piWalletAddress || null;
+      } else {
+        notLoaded.push('pi_wallet_address');
+      }
+      if (business.contactInfo !== undefined) {
+        updatePayload['contact_info'] = {
           first_name: values.firstName || null,
           last_name: values.lastName || null,
           email: values.email,
           phone: values.phone ? `${values.countryCode || ''}${values.phone}` : null,
           website: values.website || null,
-        },
-        hours: {
+        };
+      } else {
+        notLoaded.push('contact_info');
+      }
+      if (business.hours !== undefined) {
+        updatePayload['hours'] = {
           monday: { open: values.mondayOpen, close: values.mondayClose, closed: values.mondayClosed },
           tuesday: { open: values.tuesdayOpen, close: values.tuesdayClose, closed: values.tuesdayClosed },
           wednesday: { open: values.wednesdayOpen, close: values.wednesdayClose, closed: values.wednesdayClosed },
@@ -80,8 +95,14 @@ export const useBusinessUpdate = (business: Business, onSuccess?: () => void) =>
           friday: { open: values.fridayOpen, close: values.fridayClose, closed: values.fridayClosed },
           saturday: { open: values.saturdayOpen, close: values.saturdayClose, closed: values.saturdayClosed },
           sunday: { open: values.sundayOpen, close: values.sundayClose, closed: values.sundayClosed },
-        },
-      };
+        };
+      } else {
+        notLoaded.push('hours');
+      }
+      if (notLoaded.length > 0) {
+        secureLog.warn('Business update skipped fields that were not loaded', { businessId: business.id, notLoaded });
+        toast.warning("Some details couldn't be loaded, so they weren't changed. Reopen the business to edit them.");
+      }
 
       // Handle new image uploads if any
       let newImageUrls: string[] = [];
