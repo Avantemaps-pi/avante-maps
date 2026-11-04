@@ -22,7 +22,7 @@ const AddressTab: React.FC<AddressTabProps> = ({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <AddressFormFields disabled={disabled} />
+          <AddressFormFields disabled={disabled} hideApartment />
         </CardContent>
         <CardFooter className="flex justify-between pt-2">
           <Button 

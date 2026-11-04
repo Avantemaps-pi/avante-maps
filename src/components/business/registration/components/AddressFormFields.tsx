@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { FormField, FormItem, FormLabel, FormControl, FormMessage } from '@/components/ui/form';
+import { FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { useFormContext } from 'react-hook-form';
 import { FormValues } from '../formSchema';
@@ -18,9 +18,11 @@ interface AddressFormFieldsProps {
   disabled?: boolean | undefined;
   /** Registration steps: sentence-case labels without icons, in the steps' label style */
   stepLabels?: boolean | undefined;
+  /** Update business: the apartment is edited as part of the street, so there's no Apartment box */
+  hideApartment?: boolean | undefined;
 }
 
-const AddressFormFields: React.FC<AddressFormFieldsProps> = ({ disabled, stepLabels }) => {
+const AddressFormFields: React.FC<AddressFormFieldsProps> = ({ disabled, stepLabels, hideApartment }) => {
   const form = useFormContext<FormValues>();
   const { predictions, isLoading, getSuggestions, clearSuggestions } = useLocationIQAutocomplete();
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -326,39 +328,47 @@ const AddressFormFields: React.FC<AddressFormFieldsProps> = ({ disabled, stepLab
                   <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                 </div>
               )}
+
+              {hideApartment && (
+                <FormDescription className={cn("text-[13px] leading-[18px]", showSuggestions && predictions.length > 0 && "invisible")}>
+                  Include the apartment, suite or unit here, e.g. 12 Dock Road, Unit 4
+                </FormDescription>
+              )}
             </FormItem>
           )}
         />
       </div>
 
       {/* Apartment/Unit (Optional) */}
-      <FormField
-        control={form.control}
-        name="apartment"
-        render={({ field }) => (
-          <FormItem>
-            <FormLabel className={stepLabels ? STEP_LABEL_CLASS : "text-base font-semibold flex items-center gap-2"}>
-              {!stepLabels && <Building2 className="w-5 h-5 text-primary" />}
-              {stepLabels ? 'Apartment, suite or unit (optional)' : 'Apartment, Suite, Unit (Optional)'}
-            </FormLabel>
-            <FormControl>
-              <Input
-                id="apartment"
-                placeholder="e.g., Suite 100, Unit 5B, Apt 2A"
-                {...field}
-                ref={(el) => {
-                  inputRefs.current['apartment'] = el;
-                  field.ref(el);
-                }}
-                disabled={disabled}
-                autoComplete="address-line2"
-                className="h-11 sm:h-10 rounded-xl border-2 focus:border-primary transition-colors"
-              />
-            </FormControl>
-            <FormMessage />
-          </FormItem>
-        )}
-      />
+      {!hideApartment && (
+        <FormField
+          control={form.control}
+          name="apartment"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel className={stepLabels ? STEP_LABEL_CLASS : "text-base font-semibold flex items-center gap-2"}>
+                {!stepLabels && <Building2 className="w-5 h-5 text-primary" />}
+                {stepLabels ? 'Apartment, suite or unit (optional)' : 'Apartment, Suite, Unit (Optional)'}
+              </FormLabel>
+              <FormControl>
+                <Input
+                  id="apartment"
+                  placeholder="e.g., Suite 100, Unit 5B, Apt 2A"
+                  {...field}
+                  ref={(el) => {
+                    inputRefs.current['apartment'] = el;
+                    field.ref(el);
+                  }}
+                  disabled={disabled}
+                  autoComplete="address-line2"
+                  className="h-11 sm:h-10 rounded-xl border-2 focus:border-primary transition-colors"
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
 
       {/* City, Province, Postal Code in Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
