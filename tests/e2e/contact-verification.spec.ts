@@ -104,8 +104,8 @@ async function mockBackend(page: Page, opts: Setup = {}) {
 async function openVerification(page: Page, opts: Setup = {}) {
   const calls = await mockBackend(page, opts);
   await page.goto('/communicon');
+  // One business: no question, the check starts straight away
   await page.getByRole('button', { name: 'Check verification status' }).tap();
-  await page.getByRole('button', { name: /Harbour Light Coffee/ }).tap();
   await expect(card(page).getByRole('heading', { name: 'Not verified yet' })).toBeVisible();
   // The card reveals its rows one by one
   await page.waitForTimeout(1_800);
@@ -172,7 +172,7 @@ test('"Check again" re-runs verify-business for the same business, without the p
   await card(page).getByRole('button', { name: 'Check again' }).tap();
   await expect.poll(() => verifyCalls.length).toBe(2);
   expect(verifyCalls.map((r) => (r.postDataJSON() as { business_id: number }).business_id)).toEqual([BUSINESS.id, BUSINESS.id]);
-  await expect(page.getByText('Select your business:')).toHaveCount(1);
+  await expect(page.getByText('Which business should I check?')).toHaveCount(0);
   // The card updates in place
   await expect(page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' })).toHaveCount(1);
 });
