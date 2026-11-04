@@ -36,13 +36,16 @@ const getDefaultMessages = (): ChatMessage[] => [
   },
 ];
 
+// The saved bot chat keeps only its newest messages, so it can't grow forever
+const MAX_SAVED_MESSAGES = 50;
+
 const loadMessagesFromStorage = (key: string): ChatMessage[] => {
   try {
     const stored = localStorage.getItem(key);
     if (stored) {
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return parsed.slice(-MAX_SAVED_MESSAGES);
       }
     }
   } catch (error) {
@@ -53,7 +56,7 @@ const loadMessagesFromStorage = (key: string): ChatMessage[] => {
 
 const saveMessagesToStorage = (key: string, messages: ChatMessage[]) => {
   try {
-    localStorage.setItem(key, JSON.stringify(messages));
+    localStorage.setItem(key, JSON.stringify(messages.slice(-MAX_SAVED_MESSAGES)));
   } catch (error) {
     console.error('Error saving chat messages to storage:', error);
   }
