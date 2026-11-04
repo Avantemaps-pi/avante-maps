@@ -265,6 +265,8 @@ test('one label style on steps 1–3, sentence case, errors still red', async ({
   expect(await expectStepLabels(page)).toEqual(
     expect.arrayContaining(['Street address', 'Apartment, suite or unit (optional)', 'City', 'Province or state', 'Postal code', 'Contact number *', 'Email address *', 'Pi Network website URL (optional)']),
   );
+  // Registration keeps the Apartment box; only Update business hides it
+  await expect(page.locator('#apartment')).toBeVisible();
   await fillStep2(page);
   await next(page, 'Hours, photos and payment');
   expect(await expectStepLabels(page)).toEqual(expect.arrayContaining(['Business images', 'Pi wallet address (business)']));
