@@ -235,12 +235,13 @@ test.describe('the label hides with the map state cards and the keyboard', () =>
       await route.fallback();
     });
     await page.goto('/');
-    await expect(page.getByText('Loading businesses…')).toBeVisible();
+    const search = page.locator('input[aria-label="Search businesses"]');
+    await expect(search).toHaveAttribute('placeholder', 'Loading businesses…');
     await page.waitForTimeout(1_000);
     await centreMap(page, areaCentre(COUNTRY), 5);
     await tapMap(page);
     await expectHidden(page);
-    await expect(page.getByText('Loading businesses…')).toHaveCount(0, { timeout: 15_000 });
+    await expect(search).toHaveAttribute('placeholder', 'Search businesses', { timeout: 15_000 });
     await expectShown(page);
   });
 
