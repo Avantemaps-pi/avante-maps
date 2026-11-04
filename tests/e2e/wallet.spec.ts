@@ -3,7 +3,7 @@
  * spends in wallet_ledger.
  *
  * 375x812 with the sandbox session, a fake Supabase session and mocked Supabase. The ledger mock
- * applies the query's amount filter, so a client that asked for credits too would get them.
+ * applies the query's filter, so a client that asked for deposits too would get them.
  */
 import { test, expect, type Page } from '@playwright/test';
 import { mockMap, NEARBY_BUSINESSES, mockUser, STORAGE_KEY } from './helpers/mapMocks';
@@ -31,8 +31,8 @@ const payment = (id: number, created_at: string, amount: number, metadata: objec
 });
 const TOP_UP = payment(1, '2026-11-01T09:00:00Z', 40, { kind: 'wallet_topup' });
 const PI_PLAN = payment(2, '2026-11-02T09:00:00Z', 65.19, { subscriptionTier: 'small-business', frequency: 'monthly' }, COMPLETED, { approved_amount_pi: 65.19 });
-const BALANCE_SPEND = { id: 11, amount_pi: -16.4, reference_id: 'plan:small-business:monthly:11111111-1111-4111-8111-111111111111', created_at: '2026-11-03T09:00:00Z' };
-const TOP_UP_CREDIT = { id: 10, amount_pi: 40, reference_id: null, created_at: '2026-11-01T09:00:01Z' };
+const BALANCE_SPEND = { id: 11, amount_pi: -16.4, transaction_type: 'subscription', reference_id: 'plan:small-business:monthly:11111111-1111-4111-8111-111111111111', created_at: '2026-11-03T09:00:00Z' };
+const TOP_UP_CREDIT = { id: 10, amount_pi: 40, transaction_type: 'deposit', reference_id: null, created_at: '2026-11-01T09:00:01Z' };
 
 const BUSINESS = { id: 56, business_name: 'Harbour Light Coffee', pi_wallet_address: PAYOUT_WALLET, is_active: true };
 const NO_PAYOUT = { id: 57, business_name: 'Dock Road Deli', pi_wallet_address: null, is_active: true };
@@ -70,8 +70,9 @@ async function setup(page: Page, options: Options = {}) {
   await page.route('**/rest/v1/wallet_ledger*', (route) => {
     const url = new URL(route.request().url());
     requests.ledger.push(url.href);
-    const rows = (options.ledger ?? []) as { amount_pi: number }[];
-    return route.fulfill({ json: url.searchParams.get('amount_pi') === 'lt.0' ? rows.filter((row) => row.amount_pi < 0) : rows });
+    const rows = (options.ledger ?? []) as { amount_pi: number; transaction_type: string }[];
+    const filtered = url.searchParams.get('or') === '(amount_pi.lt.0,transaction_type.neq.deposit)';
+    return route.fulfill({ json: filtered ? rows.filter((row) => row.amount_pi < 0 || row.transaction_type !== 'deposit') : rows });
   });
   await page.route('**/rest/v1/businesses*', (route) => {
     requests.businesses.push(route.request().url());
@@ -120,6 +121,7 @@ test('testnet host: "Avante Maps balance", what it is for, the chip, and no USD 
   await expect(card.getByText('23.50')).toBeVisible();
   await expect(card.getByText('Pays for plans in the app.')).toBeVisible();
   await expect(card.getByText('Your Pi Wallet balance stays in the Pi Wallet app.')).toBeVisible();
+  await expect(card.getByText('Your Pi Wallet balance stays in the Pi Wallet app.')).toHaveCSS('opacity', '0.9');
   await expect(card.getByText(/USD/)).toHaveCount(0);
   await expect(card.getByText(/message/i)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Top up/ })).toBeVisible();
@@ -132,8 +134,12 @@ test('testnet host: "Avante Maps balance", what it is for, the chip, and no USD 
 async function asMainnet(page: Page) {
   const local = process.env.PREVIEW_URL ?? 'http://localhost:8080';
   await page.route('https://mainnet.avantemaps.com/**', async (route) => {
-    const response = await route.fetch({ url: route.request().url().replace('https://mainnet.avantemaps.com', local) });
-    await route.fulfill({ response });
+    try {
+      const response = await route.fetch({ url: route.request().url().replace('https://mainnet.avantemaps.com', local) });
+      await route.fulfill({ response });
+    } catch {
+      // The test ended while this request was still being forwarded
+    }
   });
 }
 
@@ -288,7 +294,7 @@ test('a top up, a Pi Wallet plan and a balance spend: labelled, newest first, no
   // Both scoped to this user. An admin's policy on the ledger would otherwise return everyone's
   const ledgerUrl = new URL(requests.ledger[0]!);
   expect(ledgerUrl.searchParams.get('user_id')).toBe(`eq.${session.user.id}`);
-  expect(ledgerUrl.searchParams.get('amount_pi')).toBe('lt.0');
+  expect(ledgerUrl.searchParams.get('or')).toBe('(amount_pi.lt.0,transaction_type.neq.deposit)');
   expect(new URL(requests.payments[0]!).searchParams.get('user_id')).toBe(`eq.${session.user.id}`);
 });
 
@@ -311,7 +317,7 @@ test('other kinds: Message fee, the memo, Payment, Payment from balance', async 
       payment(6, '2026-10-28T09:00:00Z', 1, {}, COMPLETED, { memo: 'Something else' }),
       payment(7, '2026-10-27T09:00:00Z', 2, null),
     ],
-    ledger: [{ id: 12, amount_pi: -0.1, reference_id: 'other:1', created_at: '2026-10-30T09:00:00Z' }],
+    ledger: [{ id: 12, amount_pi: -0.1, transaction_type: 'message_fee', reference_id: 'other:1', created_at: '2026-10-30T09:00:00Z' }],
   });
   await page.goto('/wallet');
   const rows = activityRows(page);
@@ -334,7 +340,7 @@ test('10 at most, merged across both sources', async ({ page }) => {
   const day = (n: number) => `2026-10-${String(n).padStart(2, '0')}T09:00:00Z`;
   await setup(page, {
     payments: Array.from({ length: 10 }, (_, i) => payment(100 + i, day(20 - i * 2), 1, { kind: 'wallet_topup' })),
-    ledger: Array.from({ length: 10 }, (_, i) => ({ id: 200 + i, amount_pi: -1, reference_id: 'plan:organization:monthly:r', created_at: day(19 - i * 2 + 2) })),
+    ledger: Array.from({ length: 10 }, (_, i) => ({ id: 200 + i, amount_pi: -1, transaction_type: 'subscription', reference_id: 'plan:organization:monthly:r', created_at: day(19 - i * 2 + 2) })),
   });
   await page.goto('/wallet');
   await expect(activityRows(page)).toHaveCount(10);
@@ -353,16 +359,80 @@ test('Pending, for a payment that is approved or only just created', async ({ pa
   await expect(activityRows(page).nth(1)).toContainText('1 Nov · Pending');
 });
 
-test('amount_mismatch reads "Cancelled · price changed", in red', async ({ page }) => {
+test('a refund and a balance adjustment: labelled, + in primary, date only, sorted with the rest', async ({ page }) => {
   await setup(page, {
-    payments: [payment(3, '2026-11-02T09:00:00Z', 5, { subscriptionTier: 'small-business' }, { approved: false, verified: false, completed: false, cancelled: true, error: 'amount_mismatch' })],
+    payments: [TOP_UP],
+    ledger: [
+      { id: 20, amount_pi: 5, transaction_type: 'refund', reference_id: null, created_at: '2026-11-04T09:00:00Z' },
+      { id: 21, amount_pi: 2.5, transaction_type: 'admin_adjustment', reference_id: null, created_at: '2026-10-31T09:00:00Z' },
+      BALANCE_SPEND,
+    ],
   });
+  await page.goto('/wallet');
+  const rows = activityRows(page);
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(0)).toContainText('Refund');
+  await expect(rows.nth(0)).toContainText('+ 5.00 π');
+  await expect(rows.nth(0).getByText('4 Nov', { exact: true })).toBeVisible();
+  await expect(rows.nth(1)).toContainText('− 16.40 π');
+  await expect(rows.nth(2)).toContainText('Top up');
+  await expect(rows.nth(3)).toContainText('Balance adjustment');
+  await expect(rows.nth(3)).toContainText('+ 2.50 π');
+  await expect(rows.nth(3).getByText('31 Oct', { exact: true })).toBeVisible();
+  // The same colour as a top up's +
+  const plus = await rows.nth(2).getByText('+ 40.00 π').evaluate((el) => getComputedStyle(el).color);
+  await expect(rows.nth(0).getByText('+ 5.00 π')).toHaveCSS('color', plus);
+  await expect(rows.nth(3).getByText('+ 2.50 π')).toHaveCSS('color', plus);
+});
+
+test('a deposit in the ledger does not add a second row to its top up', async ({ page }) => {
+  await setup(page, { payments: [TOP_UP], ledger: [TOP_UP_CREDIT] });
+  await page.goto('/wallet');
+  await expect(activityRows(page)).toHaveCount(1);
+  await expect(activityRows(page).first()).toContainText('Top up');
+  await expect(page.getByText('Balance adjustment')).toHaveCount(0);
+});
+
+const CANCELLED = { approved: false, verified: false, completed: false, cancelled: true };
+
+test('amount_mismatch reads "Cancelled · price changed", and its amount has no sign and is muted', async ({ page }) => {
+  await setup(page, { payments: [payment(3, '2026-11-02T09:00:00Z', 5, { subscriptionTier: 'small-business' }, { ...CANCELLED, error: 'amount_mismatch' })] });
   await page.goto('/wallet');
   const row = activityRows(page).first();
   await expect(row).toContainText('Plan · 2 Nov · Cancelled · price changed');
   await expect(row.getByRole('link', { name: 'Contact support' })).toHaveCount(0);
-  const destructive = await row.getByText('Cancelled · price changed').evaluate((el) => getComputedStyle(el).color);
-  await expect(row.getByText('− 5.00 π')).toHaveCSS('color', destructive);
+  const amount = row.getByText('5.00 π', { exact: true });
+  await expect(amount).toBeVisible();
+  await expect(row).not.toContainText('−');
+  const muted = await row.getByText('Plan · 2 Nov').evaluate((el) => getComputedStyle(el).color);
+  await expect(amount).toHaveCSS('color', muted);
+});
+
+test('any cancelled payment has no sign, including a top up', async ({ page }) => {
+  await setup(page, {
+    payments: [
+      payment(1, '2026-11-02T09:00:00Z', 7, { kind: 'wallet_topup' }, CANCELLED),
+      payment(2, '2026-11-01T09:00:00Z', 8, { subscriptionTier: 'organization' }, { ...CANCELLED, error: 'Pi Network API error' }),
+    ],
+  });
+  await page.goto('/wallet');
+  await expect(activityRows(page).nth(0).getByText('7.00 π', { exact: true })).toBeVisible();
+  await expect(activityRows(page).nth(1).getByText('8.00 π', { exact: true })).toBeVisible();
+});
+
+test('a failed payment that was not cancelled keeps its sign, in red', async ({ page }) => {
+  await setup(page, {
+    payments: [
+      payment(1, '2026-11-02T09:00:00Z', 7, { subscriptionTier: 'organization' }, { approved: true, completed: false, cancelled: false, voided: true }),
+      payment(2, '2026-11-01T09:00:00Z', 8, { subscriptionTier: 'organization' }, { approved: true, completed: false, cancelled: false, error: 'boom' }),
+    ],
+  });
+  await page.goto('/wallet');
+  for (const [index, text, status] of [[0, '− 7.00 π', 'Voided'], [1, '− 8.00 π', 'Error']] as const) {
+    const row = activityRows(page).nth(index);
+    const red = await row.getByText(status, { exact: true }).evaluate((el) => getComputedStyle(el).color);
+    await expect(row.getByText(text)).toHaveCSS('color', red);
+  }
 });
 
 test('plan_not_activated reads "Paid · plan not activated", with the Contact support line', async ({ page }) => {

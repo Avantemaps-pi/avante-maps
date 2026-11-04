@@ -41,6 +41,7 @@ interface PaymentRow {
 interface LedgerRow {
   id: number;
   amount_pi: number;
+  transaction_type: string;
   reference_id: string | null;
   created_at: string;
 }
@@ -73,17 +74,20 @@ const sortTime = (ts: string | null) => {
   return Number.isNaN(time) ? 0 : time;
 };
 
-function deriveStatus(status: PaymentStatusJson | null): { label: string; bad: boolean; moneyFailed: boolean; needsSupport: boolean } {
-  const failed = (label: string) => ({ label, bad: true, moneyFailed: true, needsSupport: false });
+function deriveStatus(status: PaymentStatusJson | null): { label: string; bad: boolean; moneyFailed: boolean; cancelled: boolean; needsSupport: boolean } {
+  const settled = { moneyFailed: false, cancelled: false, needsSupport: false };
+  const failed = (label: string) => ({ label, bad: true, moneyFailed: true, cancelled: false, needsSupport: false });
   // The Pi moved, so this one isn't a failed payment: its amount stays the normal colour
   if (status?.completed && status.error === 'plan_not_activated') {
-    return { label: 'Paid · plan not activated', bad: true, moneyFailed: false, needsSupport: true };
+    return { label: 'Paid · plan not activated', bad: true, ...settled, needsSupport: true };
   }
-  if (status?.completed) return { label: 'Completed', bad: false, moneyFailed: false, needsSupport: false };
-  if (status?.cancelled) return failed(status.error === 'amount_mismatch' ? 'Cancelled · price changed' : 'Cancelled');
+  if (status?.completed) return { label: 'Completed', bad: false, ...settled };
+  if (status?.cancelled) {
+    return { label: status.error === 'amount_mismatch' ? 'Cancelled · price changed' : 'Cancelled', bad: true, ...settled, cancelled: true };
+  }
   if (status?.voided) return failed('Voided');
   if (status?.error) return failed('Error');
-  return { label: 'Pending', bad: false, moneyFailed: false, needsSupport: false };
+  return { label: 'Pending', bad: false, ...settled };
 }
 
 function paymentToItem(row: PaymentRow): ActivityItem {
@@ -113,14 +117,28 @@ function paymentToItem(row: PaymentRow): ActivityItem {
     meta: [...(type ? [type] : []), formatDate(row.created_at)],
     status: state.label,
     statusIsBad: state.bad,
-    amount: `${isTopUp ? '+' : '−'} ${amount} π`,
-    amountClass: state.moneyFailed ? 'text-destructive' : isTopUp ? 'text-primary' : 'text-foreground',
+    // A cancelled payment moved nothing, so it has no sign
+    amount: state.cancelled ? `${amount} π` : `${isTopUp ? '+' : '−'} ${amount} π`,
+    amountClass: state.cancelled ? 'text-muted-foreground' : state.moneyFailed ? 'text-destructive' : isTopUp ? 'text-primary' : 'text-foreground',
     needsSupport: state.needsSupport,
     sortTime: sortTime(row.created_at),
   };
 }
 
 function ledgerToItem(row: LedgerRow): ActivityItem {
+  if (Number(row.amount_pi) > 0) {
+    return {
+      key: `ledger-${row.id}`,
+      label: row.transaction_type === 'refund' ? 'Refund' : 'Balance adjustment',
+      meta: [formatDate(row.created_at)],
+      status: null,
+      statusIsBad: false,
+      amount: `+ ${Number(row.amount_pi).toFixed(2)} π`,
+      amountClass: 'text-primary',
+      needsSupport: false,
+      sortTime: sortTime(row.created_at),
+    };
+  }
   const isPlan = row.reference_id?.startsWith('plan:') ?? false;
   return {
     key: `ledger-${row.id}`,
@@ -148,13 +166,13 @@ const fetchActivity = async (): Promise<ActivityItem[] | null> => {
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(PAGE_SIZE),
-    // Only spends: a top up's credit already shows from payments. The user filter matters here,
-    // because this table's policy lets an admin read everyone's rows
+    // Everything but a deposit's credit, which already shows from payments as "Top up". The user
+    // filter matters here, because this table's policy lets an admin read everyone's rows
     supabase
       .from('wallet_ledger')
-      .select('id, amount_pi, reference_id, created_at')
+      .select('id, amount_pi, transaction_type, reference_id, created_at')
       .eq('user_id', userId)
-      .lt('amount_pi', 0)
+      .or('amount_pi.lt.0,transaction_type.neq.deposit')
       .order('created_at', { ascending: false })
       .limit(PAGE_SIZE),
   ]);
