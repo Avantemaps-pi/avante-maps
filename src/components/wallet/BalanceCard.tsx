@@ -1,36 +1,53 @@
-import React from 'react';
-import { Card } from '@/components/ui/card';
+import React, { useEffect, useState } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
+import { isMainnetPiHost } from '@/config/environment';
 import { usePiPrice } from '@/hooks/usePiPrice';
 
 interface BalanceCardProps {
   balance?: number | null;
   isLoading?: boolean;
+  isError?: boolean;
 }
 
-const BalanceCard: React.FC<BalanceCardProps> = ({ balance, isLoading }) => {
-  const { piPrice } = usePiPrice();
+const BalanceCard: React.FC<BalanceCardProps> = ({ balance, isLoading, isError }) => {
+  const { piPrice, isLoading: isPriceLoading, error: piPriceError } = usePiPrice();
+  // Read after mount: the page is server-rendered, and there's no window on the server
+  const [hostname, setHostname] = useState<string | null>(null);
+  useEffect(() => setHostname(window.location.hostname), []);
+
   const piBalance = typeof balance === 'number' && !Number.isNaN(balance) ? balance : 0;
-  const usdEquivalent = piPrice ? piBalance * piPrice : null;
+  // usePiPrice falls back to a made-up rate when pi_price can't be read
+  const usdEquivalent = piPrice && !piPriceError ? piBalance * piPrice : null;
+  const isMainnet = hostname !== null && isMainnetPiHost(hostname);
 
   return (
-    <Card className="mb-4 bg-gradient-to-br from-primary to-primary/80 text-primary-foreground border-0 shadow-md">
-      <div className="px-5 py-5 sm:px-6 sm:py-6">
-        <p className="text-xs sm:text-sm font-medium uppercase tracking-wide opacity-90">
-          Your Pi balance
-        </p>
-        {isLoading ? (
-          <Skeleton className="mt-2 h-9 w-32 bg-primary-foreground/20" />
-        ) : (
-          <p className="mt-1 text-3xl sm:text-4xl font-semibold tabular-nums">
-            {piBalance.toFixed(2)} <span className="text-2xl sm:text-3xl opacity-90">π</span>
-          </p>
+    <section aria-label="Avante Maps balance" className="mb-3 rounded-xl bg-primary px-5 py-[18px] text-primary-foreground">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold">Avante Maps balance</p>
+        {hostname !== null && !isMainnet && (
+          <span className="rounded-full border border-primary-foreground/45 px-2 py-0.5 text-xs font-medium">Testnet Pi</span>
         )}
-        <p className="mt-1 text-xs sm:text-sm opacity-75">
+      </div>
+      {isLoading ? (
+        <Skeleton className="my-1 h-[34px] w-32 bg-primary-foreground/20" />
+      ) : isError ? (
+        <>
+          <p className="text-[34px] font-semibold leading-[42px] tabular-nums">— <span className="text-[26px] opacity-90">π</span></p>
+          <p className="text-sm">Couldn't load your balance.</p>
+        </>
+      ) : (
+        <p className="text-[34px] font-semibold leading-[42px] tabular-nums">
+          {piBalance.toFixed(2)} <span className="text-[26px] opacity-90">π</span>
+        </p>
+      )}
+      <p className="mt-1 text-sm opacity-90">Pays for plans in the app.</p>
+      <p className="text-xs leading-[17px] opacity-80">Your Pi Wallet balance stays in the Pi Wallet app.</p>
+      {isMainnet && !isError && !isPriceLoading && (
+        <p className="mt-1 text-xs opacity-80">
           {usdEquivalent !== null ? `≈ $${usdEquivalent.toFixed(2)} USD` : 'USD value unavailable'}
         </p>
-      </div>
-    </Card>
+      )}
+    </section>
   );
 };
 
