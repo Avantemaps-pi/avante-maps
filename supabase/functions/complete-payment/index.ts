@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 import { createPaymentNotification } from '../_shared/notifications.ts';
+import { getExpectedPlanPi } from '../_shared/prices.ts';
 import {
   getOrCreateLifecycleId,
   makeLogger,
@@ -354,29 +355,19 @@ Deno.serve(async (req) => {
       // 0.5% tolerance to accommodate FX rounding at price-conversion time.
       const AMOUNT_TOLERANCE = 0.995;
 
-      // Server-side USD price table for subscription tiers (source of truth).
-      const SUBSCRIPTION_USD_PRICES: Record<string, { monthly: number; annual: number }> = {
-        'individual': { monthly: 0, annual: 0 },
-        'small-business': { monthly: 5, annual: 48 },
-        'organization': { monthly: 10, annual: 96 },
-      };
-
       if (paymentRequest.metadata?.subscriptionTier) {
         const tier = paymentRequest.metadata.subscriptionTier;
         const freq = paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly';
-        const usdPrice = SUBSCRIPTION_USD_PRICES[tier]?.[freq];
-        if (usdPrice == null || usdPrice <= 0) {
+        const expected = await getExpectedPlanPi(supabaseClient, tier, freq);
+        if (!expected.ok && expected.error === 'invalid_tier') {
           log.error(`${FN}.verify.unknown_tier`, { stage: 'verify', tier, freq });
           return respond({ success: false, message: 'Invalid subscription tier' }, 400);
         }
-        const { data: priceRow, error: priceErr } = await supabaseClient
-          .from('pi_price').select('price_usd').limit(1).maybeSingle();
-        const piUsd = Number(priceRow?.price_usd ?? 0);
-        if (priceErr || !Number.isFinite(piUsd) || piUsd <= 0) {
+        if (!expected.ok) {
           log.error(`${FN}.verify.pi_price_unavailable`, { stage: 'verify' });
           return respond({ success: false, message: 'Price service unavailable' }, 503);
         }
-        const expectedPi = usdPrice / piUsd;
+        const { expectedPi } = expected;
         if (verifiedPiAmount < expectedPi * AMOUNT_TOLERANCE) {
           log.error(`${FN}.verify.subscription_amount_mismatch`, {
             stage: 'verify', tier, freq, expectedPi, verifiedPiAmount,
@@ -458,15 +449,12 @@ Deno.serve(async (req) => {
 
       if (paymentRequest.metadata?.subscriptionTier) {
         try {
-          const metadata = paymentRequest.metadata as any;
-          const username = metadata?.username || `user_${paymentRequest.userId.slice(0, 8)}`;
-          const email = metadata?.email || `${username}@pi.app`;
-
           const { error: subscriptionError } = await supabaseClient.rpc('handle_subscription_after_payment', {
             p_user_id: paymentRequest.userId,
-            p_username: username,
-            p_email: email,
+            p_username: null,
+            p_email: null,
             p_subscription_tier: paymentRequest.metadata.subscriptionTier,
+            p_frequency: paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly',
           });
 
           if (subscriptionError) {
