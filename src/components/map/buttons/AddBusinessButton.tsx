@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from '@/lib/router-compat';
 import { Button } from '@/components/ui/button';
-import { Plus, X, Store, Loader2, MessageSquare } from 'lucide-react';
+import { Plus, X, Store, MessageSquare } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/context/auth/useAuth';
 import { useKeyboardOpen } from '@/hooks/useKeyboardOpen';
@@ -10,6 +10,8 @@ interface AddBusinessButtonProps {
   selectedPlace: string | null;
   /** Hidden but mounted while the map card strip is open */
   hiddenByStrip?: boolean;
+  /** The map's businesses are still loading: the button waits for them */
+  mapLoading?: boolean;
 }
 
 type FabState = 'expanded' | 'collapsed' | 'hasBusiness';
@@ -25,7 +27,7 @@ interface BusinessCountCache {
   timestamp: string;
 }
 
-const AddBusinessButton: React.FC<AddBusinessButtonProps> = ({ selectedPlace, hiddenByStrip = false }) => {
+const AddBusinessButton: React.FC<AddBusinessButtonProps> = ({ selectedPlace, hiddenByStrip = false, mapLoading = false }) => {
   const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const [fabState, setFabState] = useState<FabState | null>(null);
@@ -129,30 +131,24 @@ const AddBusinessButton: React.FC<AddBusinessButtonProps> = ({ selectedPlace, hi
   // Faded out, not unmounted, while the on-screen keyboard or the card strip is showing
   const keyboardClass = hidden ? 'opacity-0 pointer-events-none' : '';
   const keyboardProps = { 'aria-hidden': hidden || undefined, inert: hidden };
+  // Fades in once loading ends. No fill, so it can't override the opacity-0 above when it finishes
+  const appearClass = 'motion-safe:animate-in motion-safe:fade-in-0 [--tw-animation-duration:150ms]';
 
-  if (isLoading) {
+  // Nothing to see or focus. It holds the button's place because the zoom control lines up with it
+  if (isLoading || mapLoading) {
     return (
       <div
         data-add-business-button
-        className={`absolute ${bottomClass} ${positionClass} z-20 transition-opacity duration-150 motion-reduce:transition-none ${keyboardClass}`}
-        {...keyboardProps}
-      >
-        <Button
-          data-add-business-fab
-          disabled
-          className="h-14 w-14 sm:h-14 sm:w-14 p-0 rounded-full bg-primary/60 opacity-70 shadow-float flex items-center justify-center cursor-not-allowed"
-          aria-label="Loading"
-        >
-          <Loader2 className="h-5 w-5 animate-spin" />
-        </Button>
-      </div>
+        aria-hidden="true"
+        className={`invisible pointer-events-none absolute h-14 w-14 ${bottomClass} ${positionClass}`}
+      />
     );
   }
 
   // State 1: expanded pill
   if (fabState === 'expanded') {
     return (
-      <div data-add-business-button className={`absolute ${bottomClass} ${positionClass} z-20 transition-all duration-300 motion-reduce:transition-none ${keyboardClass}`} {...keyboardProps}>
+      <div data-add-business-button className={`absolute ${bottomClass} ${positionClass} z-20 transition-all duration-300 motion-reduce:transition-none ${appearClass} ${keyboardClass}`} {...keyboardProps}>
         <Link to="/registration">
           <Button
             data-add-business-fab
@@ -240,7 +236,7 @@ const AddBusinessButton: React.FC<AddBusinessButtonProps> = ({ selectedPlace, hi
       )}
       <div
         data-add-business-button
-        className={`absolute ${bottomClass} ${positionClass} ${speedDialOpen ? 'z-[56]' : 'z-30'} flex flex-col items-end gap-3 transition-opacity duration-150 motion-reduce:transition-none ${keyboardClass}`}
+        className={`absolute ${bottomClass} ${positionClass} ${speedDialOpen ? 'z-[56]' : 'z-30'} flex flex-col items-end gap-3 transition-opacity duration-150 motion-reduce:transition-none ${appearClass} ${keyboardClass}`}
         {...keyboardProps}
       >
         {speedDialOpen && (
