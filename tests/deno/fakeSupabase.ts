@@ -5,7 +5,7 @@
  *
  * Supports what the contact functions use: select with eq/in filters, single
  * and maybeSingle, update (PATCH) with eq filters and returned rows, and upsert
- * (POST with on_conflict).
+ * (POST with on_conflict). RPC calls go to `rpc`.
  */
 
 export type Row = Record<string, unknown>;
@@ -71,6 +71,7 @@ export function installFakeSupabase(options: {
   /** Bearer token → user id */
   users: Record<string, string>;
   external?: (url: URL, init: RequestInit | undefined) => Promise<Response | undefined> | Response | undefined;
+  rpc?: (name: string, args: Row) => Response;
 }): FakeSupabase {
   const fake: FakeSupabase = { tables: options.tables, calls: [], restore: () => (activeFetch = null) };
 
@@ -92,6 +93,10 @@ export function installFakeSupabase(options: {
       return id
         ? Response.json({ id, aud: 'authenticated', role: 'authenticated' })
         : Response.json({ message: 'invalid JWT' }, { status: 401 });
+    }
+
+    if (url.pathname.startsWith('/rest/v1/rpc/') && options.rpc) {
+      return options.rpc(url.pathname.replace('/rest/v1/rpc/', ''), JSON.parse((await req.text()) || '{}'));
     }
 
     const table = url.pathname.replace('/rest/v1/', '');
