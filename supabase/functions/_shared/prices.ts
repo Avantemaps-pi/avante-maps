@@ -7,6 +7,9 @@ export const SUBSCRIPTION_USD_PRICES: Record<string, { monthly: number; annual: 
   'organization': { monthly: 10, annual: 96 },
 };
 
+// 0.5% tolerance to accommodate FX rounding at price-conversion time.
+export const AMOUNT_TOLERANCE = 0.995;
+
 export type ExpectedPlanPi =
   | { ok: true; expectedPi: number }
   | { ok: false; error: 'invalid_tier' | 'price_unavailable' };
