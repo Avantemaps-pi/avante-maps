@@ -29,7 +29,7 @@ import {
 // Which tab shows each field, in tab order
 const TAB_FIELDS: Array<{ tab: string; fields: Array<keyof FormValues> }> = [
   { tab: 'business-owner', fields: ['firstName', 'lastName', 'businessName'] },
-  { tab: 'address', fields: ['country', 'streetAddress', 'apartment', 'city', 'state', 'zipCode'] },
+  { tab: 'address', fields: ['country', 'streetAddress', 'city', 'state', 'zipCode'] },
   { tab: 'contact', fields: ['countryCode', 'phone', 'email', 'website'] },
   { tab: 'hours', fields: daysOfWeek.flatMap((day) => [day.open, day.close, day.closed] as Array<keyof FormValues>) },
   { tab: 'details', fields: ['businessTypes', 'businessDescription', 'piWalletAddress'] },

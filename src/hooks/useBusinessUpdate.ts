@@ -101,9 +101,9 @@ export const useBusinessUpdate = (business: Business, onSuccess?: () => void) =>
         notLoaded.push('hours');
       }
 
-      // Stored as registration stores them: the apartment is part of street_address
+      // On this page the apartment is part of the street, as it's stored: there's no Apartment box
       const addressFields: Array<[column: string, stored: string | null | undefined, value: string]> = [
-        ['street_address', business.streetAddress, values.apartment ? `${values.streetAddress}, ${values.apartment}` : values.streetAddress],
+        ['street_address', business.streetAddress, values.streetAddress.trim()],
         ['city', business.city, values.city],
         ['state', business.state, values.state],
         ['zip_code', business.zipCode, values.zipCode],
@@ -117,9 +117,6 @@ export const useBusinessUpdate = (business: Business, onSuccess?: () => void) =>
         }
         updatePayload[column] = value;
         if ((stored ?? '').trim() !== value.trim()) addressChanged = true;
-      }
-      if (values.apartment) {
-        updatePayload['address_components'] = { apartment: values.apartment };
       }
 
       // A new address moves the map pin. If it can't be located the address is still saved,

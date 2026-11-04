@@ -273,15 +273,45 @@ test('when the geocoder fails: the address is saved, the position stays, a toast
   await expect(page.getByText("Address saved, but we couldn't update the map pin")).toBeVisible();
 });
 
-test('typing an apartment saves it as registration does: in the street, and in address_components', async ({ page }) => {
-  const { patches, geocoded } = await setup(page);
+const STREET_WITH_UNIT = { ...ROW, street_address: '12 Dock Road, Unit 4' };
+const HINT = 'Include the apartment, suite or unit here, e.g. 12 Dock Road, Unit 4';
+
+test('the Address tab has no Apartment box; a hint describes the street input', async ({ page }) => {
+  await setup(page);
   await fromList(page);
   await tab(page, 'Address').tap();
-  await page.locator('#apartment').fill('Unit 4');
+  await expect(page.locator('#streetAddress')).toBeVisible();
+  await expect(page.locator('#apartment')).toHaveCount(0);
+  const hint = page.getByText(HINT, { exact: true });
+  await expect(hint).toBeVisible();
+  await expect(hint).toHaveCSS('font-size', '13px');
+  await expect(page.locator('#streetAddress')).toHaveAttribute('aria-describedby', (await hint.getAttribute('id'))!);
+  // Under the input
+  expect((await hint.boundingBox())!.y).toBeGreaterThan((await page.locator('#streetAddress').boundingBox())!.y);
+});
+
+test('a unit in the stored street stays once: changing only the city leaves the street as it was', async ({ page }) => {
+  const { patches } = await setup(page, STREET_WITH_UNIT);
+  await fromList(page);
+  await tab(page, 'Address').tap();
+  await expect(page.locator('#streetAddress')).toHaveValue('12 Dock Road, Unit 4');
+  await page.locator('#city').fill('Stellenbosch');
   await submit(page);
   await expect.poll(() => patches.length).toBe(1);
-  expect(patches[0]).toMatchObject({ street_address: '12 Dock Road, Unit 4', address_components: { apartment: 'Unit 4' }, ...NEW_POSITION });
-  expect(geocoded).toEqual(['12 Dock Road, Unit 4, Cape Town, Western Cape, 8001, South Africa']);
+  expect(patches[0]).toMatchObject({ street_address: '12 Dock Road, Unit 4', city: 'Stellenbosch' });
+  expect(patches[0]).not.toHaveProperty('address_components');
+});
+
+test('changing the street and unit saves exactly what was typed, and geocodes it', async ({ page }) => {
+  const { patches, geocoded } = await setup(page, STREET_WITH_UNIT);
+  await fromList(page);
+  await tab(page, 'Address').tap();
+  await page.locator('#streetAddress').fill('14 Dock Road, Unit 9');
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toMatchObject({ street_address: '14 Dock Road, Unit 9', ...NEW_POSITION });
+  expect(patches[0]).not.toHaveProperty('address_components');
+  expect(geocoded).toEqual(['14 Dock Road, Unit 9, Cape Town, Western Cape, 8001, South Africa']);
 });
 
 test('an address not loaded is left out of the save, and nothing is geocoded', async ({ page }) => {
