@@ -36,7 +36,7 @@ const reply = (totalTransactions: number, creditedTransactions: number, uniqueWa
   ...extra,
 });
 
-async function setup(page: Page, opts: { businesses?: object[]; replies?: object[]; failFrom?: number; history?: object[]; verifyDelayMs?: number; businessLoadFailures?: number } = {}) {
+async function setup(page: Page, opts: { businesses?: object[]; replies?: object[]; failFrom?: number; history?: object[]; verifyDelayMs?: number; businessLoadFailures?: number; signedOut?: boolean } = {}) {
   const verifyCalls: Request[] = [];
   let businessLoadFailures = opts.businessLoadFailures ?? 0;
   await page.route('**/pi-sdk.js', (route) => route.abort());
@@ -72,14 +72,14 @@ async function setup(page: Page, opts: { businesses?: object[]; replies?: object
     ([mockKey, storageKey, user, session, messagesKey, history]) => {
       localStorage.setItem(mockKey as string, '1');
       localStorage.setItem(storageKey as string, JSON.stringify({ ...(user as object), lastAuthenticated: Date.now() }));
-      localStorage.setItem('supabase.auth.token', JSON.stringify(session));
+      if (session) localStorage.setItem('supabase.auth.token', JSON.stringify(session));
       // Only seeded once, so a reload keeps what the app saved
       if (history && !sessionStorage.getItem('seeded')) {
         localStorage.setItem(messagesKey as string, JSON.stringify(history));
         sessionStorage.setItem('seeded', '1');
       }
     },
-    [SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser, fakeSession, STORAGE_MESSAGES, opts.history ?? null],
+    [SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser, opts.signedOut ? null : fakeSession, STORAGE_MESSAGES, opts.history ?? null],
   );
   await page.goto('/communicon');
   await expect(page.getByRole('tab', { name: 'Bot' })).toBeVisible();
@@ -321,6 +321,20 @@ for (const [flow, start] of [['the verification check', 'Check verification stat
   });
 }
 
+for (const [flow, start] of [['the verification check', 'Check verification status'], ['My listings', 'My listings']] as const) {
+  test(`signed out in ${flow}: asks to sign in, with no Try again, no load error and no redirect`, async ({ page }) => {
+    const { verifyCalls } = await setup(page, { signedOut: true });
+    await page.getByRole('button', { name: start }).tap();
+    await expect(page.getByText('Sign in to see your businesses.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    await expect(page.getByText(LOAD_ERROR)).toHaveCount(0);
+    await expect(page.getByText(/don't have any registered businesses/)).toHaveCount(0);
+    await page.waitForTimeout(2_600);
+    await expect(page).toHaveURL(/\/communicon$/);
+    expect(verifyCalls).toHaveLength(0);
+  });
+}
+
 test('Try again in the verification check: the error goes and the check runs, with one user message', async ({ page }) => {
   const { verifyCalls } = await setup(page, { businessLoadFailures: 1 });
   await page.getByRole('button', { name: 'Check verification status' }).tap();
@@ -390,7 +404,7 @@ test('every business deactivated: says so, no check, and no redirect to Registra
 test('My listings shows a deactivated business with an "Inactive" label, and offers only active ones to check', async ({ page }) => {
   const { verifyCalls } = await setup(page, { businesses: [HARBOUR, INACTIVE] });
   await page.getByRole('button', { name: 'My listings' }).tap();
-  const rows = page.getByRole('listitem').filter({ hasText: /—/ });
+  const rows = page.getByRole('listitem').filter({ hasText: / · / });
   await expect(rows).toHaveCount(2);
   const deactivated = rows.filter({ hasText: INACTIVE.business_name });
   const active = rows.filter({ hasText: HARBOUR.business_name });
@@ -399,6 +413,9 @@ test('My listings shows a deactivated business with an "Inactive" label, and off
   await expect(label).toHaveCSS('font-size', '12px');
   await expect(label).toHaveClass(/text-muted-foreground/);
   await expect(active.getByText('Inactive', { exact: true })).toHaveCount(0);
+  // One separator: no leading bullet, dash or second bullet
+  await expect(deactivated).toHaveText(`${INACTIVE.business_name} · Not verifiedInactive`);
+  await expect(active).toHaveText(`${HARBOUR.business_name} · Not verified`);
 
   await expect(page.getByRole('button', { name: INACTIVE.business_name })).toHaveCount(0);
   await page.getByRole('button', { name: HARBOUR.business_name }).tap();
