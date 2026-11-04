@@ -6,6 +6,8 @@ export interface ChatMessageProps {
   text: string;
   sender: string;
   timestamp: string;
+  /** Inside the bubble, in place of the time (a question's buttons) */
+  children?: React.ReactNode;
 }
 
 const TypingDots: React.FC = () => (
@@ -16,7 +18,7 @@ const TypingDots: React.FC = () => (
   </span>
 );
 
-const ChatMessage: React.FC<ChatMessageProps> = ({ text, sender, timestamp }) => {
+const ChatMessage: React.FC<ChatMessageProps> = ({ text, sender, timestamp, children }) => {
   const isUser = sender === 'user';
   const isAssistant = sender === 'ai' || sender === 'support' || sender === 'system' || sender === 'live-support';
   const isStreamingPlaceholder = sender === 'ai' && text === '';
@@ -44,7 +46,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({ text, sender, timestamp }) =>
             )}
           </div>
         )}
-        <p className={`text-xs mt-1 ${isUser ? 'opacity-80' : 'opacity-70'}`}>{timestamp}</p>
+        {children ?? <p className={`text-xs mt-1 ${isUser ? 'opacity-80' : 'opacity-70'}`}>{timestamp}</p>}
       </div>
     </div>
   );

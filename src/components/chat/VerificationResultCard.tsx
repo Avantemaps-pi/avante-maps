@@ -19,6 +19,8 @@ export interface VerificationMetrics {
   walletMissing?: boolean;
   /** The business checked, for "Check again" */
   businessId?: number;
+  /** The check is still running: the card shows spinners until the result fills it in */
+  pending?: boolean | undefined;
   /** When this result arrived (ISO); cards saved before this existed have none */
   checkedAt?: string | undefined;
 }
@@ -187,6 +189,7 @@ const VerificationResultCard: React.FC<VerificationResultCardProps> = ({
   const { verified, businessName } = metrics;
 
   const [contactInfoConfirmed, setContactInfoConfirmed] = useState(metrics.contactInfoConfirmed);
+  const { pending } = metrics;
   const [revealed, setRevealed] = useState<boolean[]>(animate ? [false, false, false] : [true, true, true]);
   const [otpDialogOpen, setOtpDialogOpen] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -216,7 +219,9 @@ const VerificationResultCard: React.FC<VerificationResultCardProps> = ({
     }
   }, [onCheckAgain]);
 
+  // The rows reveal once, when the result is in
   useEffect(() => {
+    if (pending) return;
     const timers = REVEAL_DELAYS.map((delay, i) =>
       setTimeout(() => {
         setRevealed(prev => {
@@ -227,7 +232,7 @@ const VerificationResultCard: React.FC<VerificationResultCardProps> = ({
       }, delay)
     );
     return () => timers.forEach(clearTimeout);
-  }, []);
+  }, [pending]);
 
   const progress = verificationProgress({ ...metrics, contactInfoConfirmed });
   const lastChecked = formatCheckTime(metrics.checkedAt);
@@ -243,12 +248,13 @@ const VerificationResultCard: React.FC<VerificationResultCardProps> = ({
 
   const canShowOTP = !contactInfoConfirmed && contactEmail && contactBusinessId && onSendContactOTP && onVerifyContactOTP;
   // The code goes to the business's contact email only; without one, say where to add it
-  const needsContactEmail = !contactInfoConfirmed && !!contactBusinessId && !contactEmail;
+  const needsContactEmail = !pending && !contactInfoConfirmed && !!contactBusinessId && !contactEmail;
 
   return (
     <>
       <section
         aria-label={`Verification progress for ${businessName}`}
+        aria-busy={!!pending}
         className="flex flex-col gap-3.5 rounded-xl border bg-card p-4 text-card-foreground"
       >
         <div className="flex items-center gap-3">
@@ -257,15 +263,17 @@ const VerificationResultCard: React.FC<VerificationResultCardProps> = ({
           </span>
           <div className="min-w-0">
             <h4 className="text-lg font-bold leading-6">
-              {verified ? 'Verified' : readyToVerify ? 'Ready to verify' : 'Not verified yet'}
+              {pending ? `Checking ${businessName}…` : verified ? 'Verified' : readyToVerify ? 'Ready to verify' : 'Not verified yet'}
             </h4>
-            <p data-verification-progress className="text-sm text-muted-foreground">
-              {verified
-                ? businessName
-                : readyToVerify
-                  ? `${businessName} · All done`
-                  : `${businessName} · ${progress.done} of ${progress.total} done`}
-            </p>
+            {!pending && (
+              <p data-verification-progress className="text-sm text-muted-foreground">
+                {verified
+                  ? businessName
+                  : readyToVerify
+                    ? `${businessName} · All done`
+                    : `${businessName} · ${progress.done} of ${progress.total} done`}
+              </p>
+            )}
           </div>
         </div>
         {lastChecked && (
@@ -299,7 +307,7 @@ const VerificationResultCard: React.FC<VerificationResultCardProps> = ({
           }
         />
 
-        {!verified && (
+        {!verified && !pending && (
           <>
             <div className="flex gap-2.5 rounded-lg bg-accent p-3 text-[13px] leading-[18px] text-accent-foreground">
               <Info className="mt-px h-4 w-4 shrink-0 text-primary" aria-hidden="true" />

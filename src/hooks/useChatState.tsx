@@ -1,5 +1,5 @@
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from '@/lib/router-compat';
 import { filterInappropriateContent, isSafeForAI } from '@/utils/contentFilter';
 import { VerificationMetrics } from '@/components/chat/VerificationResultCard';
@@ -27,6 +27,11 @@ type ChatMessage = {
   animateVerification?: boolean;
 };
 
+type ChatBusiness = NonNullable<ChatMessage['businesses']>[number];
+
+// Longest reveal in VerificationResultCard, plus a margin
+const REVEAL_DONE_MS = 1800;
+
 const getDefaultMessages = (): ChatMessage[] => [
   {
     id: 1,
@@ -45,7 +50,11 @@ const loadMessagesFromStorage = (key: string): ChatMessage[] => {
     if (stored) {
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.slice(-MAX_SAVED_MESSAGES);
+        // The reveal has already run, and a check still pending can't finish after a reload
+        return parsed
+          .filter((msg: ChatMessage) => !msg.verificationMetrics?.pending)
+          .map((msg: ChatMessage) => (msg.animateVerification ? { ...msg, animateVerification: false } : msg))
+          .slice(-MAX_SAVED_MESSAGES);
       }
     }
   } catch (error) {
@@ -56,7 +65,8 @@ const loadMessagesFromStorage = (key: string): ChatMessage[] => {
 
 const saveMessagesToStorage = (key: string, messages: ChatMessage[]) => {
   try {
-    localStorage.setItem(key, JSON.stringify(messages.slice(-MAX_SAVED_MESSAGES)));
+    const saved = messages.filter(msg => !msg.verificationMetrics?.pending).slice(-MAX_SAVED_MESSAGES);
+    localStorage.setItem(key, JSON.stringify(saved));
   } catch (error) {
     console.error('Error saving chat messages to storage:', error);
   }
@@ -75,7 +85,10 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
   const [chatMode, setChatMode] = useState<ChatMode>(initialChatMode);
   const [awaitingVerificationConfirmation, setAwaitingVerificationConfirmation] = useState(false);
   const [awaitingBusinessSelection, setAwaitingBusinessSelection] = useState(false);
-  const [awaitingVerificationBusinessSelection, setAwaitingVerificationBusinessSelection] = useState(false);
+  // The business question the flow is waiting on (its message id, and what a choice does). Any
+  // other picker in the chat, such as one in an old saved chat, is no longer tappable
+  const [activePickerId, setActivePickerId] = useState<number | null>(null);
+  const activePickerRef = useRef<{ id: number; onChosen: (business: ChatBusiness, pickerId: number) => Promise<void> } | null>(null);
   const [selectedBusinessForVerification, setSelectedBusinessForVerification] = useState<any>(null);
   const [userBusinesses, setUserBusinesses] = useState<any[]>([]);
   const [isValidatingConversation, setIsValidatingConversation] = useState(false);
@@ -327,7 +340,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       const filteredMessage = chatMode === "ai" ? filterInappropriateContent(rawText) : rawText;
 
       // Handle business selection for verification - now handled by button clicks
-      if (awaitingVerificationBusinessSelection) {
+      if (activePickerId !== null) {
         const errorMessage = {
           id: messages.length + 1,
           text: "Please click one of the business buttons above to select.",
@@ -535,71 +548,13 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     }, 1000);
   };
 
-  // Trigger verification flow
-  const triggerVerificationFlow = useCallback(async (type: 'verification' | 'certification') => {
-    // Add user's message to chat
-    const userMessage = {
-      id: Date.now(),
-      text: `/verification`,
-      sender: "user",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    
-    setMessages(prev => [...prev, userMessage]);
-
-    // Fetch user's businesses
-    const businesses = await fetchUserBusinesses();
-    setUserBusinesses(businesses);
-
-    if (businesses.length === 0) {
-      // No businesses registered
-      const noBusinessMessage = {
-        id: Date.now() + 1,
-        text: "You don't have any registered businesses yet. Please register a business first to request verification.",
-        sender: "support",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      setMessages(prev => [...prev, noBusinessMessage]);
-
-      setTimeout(() => {
-        navigate('/registration');
-      }, 2000);
-      return;
-    }
-
-    // Show business selection
-    const businessSelectionMessage = {
-      id: Date.now() + 2,
-      text: "Please select which business you'd like to verify:",
-      sender: "support",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    
-    const businessOptionsMessage = {
-      id: Date.now() + 3,
-      text: "Select your business:",
-      sender: "business-selection",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      businesses: businesses // Pass businesses data
-    };
-    
-    setMessages(prev => [...prev, businessSelectionMessage, businessOptionsMessage]);
-    setAwaitingVerificationBusinessSelection(true);
-  }, [fetchUserBusinesses, navigate]);
-
-  // Runs verify-business for one business and posts the result card (after a business is
-  // picked, and from the card's "Check again")
-  // With a target message ("Check again"), its card updates in place; otherwise a new one is added
-  const runVerification = useCallback(async (business: { id: number; business_name: string }, targetMessageId?: number) => {
-    if (targetMessageId === undefined) {
-      const processingMessage = {
-        id: Date.now() + 1,
-        text: `Processing verification request for "${business.business_name}"...`,
-        sender: "support",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      setMessages(prev => [...prev, processingMessage]);
-    }
+  // Runs verify-business for one business and fills its card in place: the pending card of a
+  // new check, or the existing card for "Check again"
+  const runVerification = useCallback(async (
+    business: { id: number; business_name: string },
+    targetMessageId: number | undefined,
+    newCheck = false,
+  ) => {
 
     try {
       // Get current session for auth token
@@ -671,50 +626,31 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
         checkedAt: new Date().toISOString(),
       };
 
-      if (targetMessageId !== undefined) {
-        setMessages(prev => prev.map(msg =>
-          msg.id === targetMessageId
-            ? {
-                ...msg,
-                verificationMetrics: metrics,
-                contactVerification: { email: contactEmail, businessId: business.id },
-                animateVerification: false,
-              }
-            : msg
-        ));
+      // The card is the message: no bubble text. It shows the masked contact email and, while it
+      // isn't confirmed, offers the code (or asks for a contact email first)
+      setMessages(prev => prev.map(msg =>
+        msg.id === targetMessageId
+          ? {
+              ...msg,
+              verificationMetrics: metrics,
+              contactVerification: { email: contactEmail, businessId: business.id },
+              animateVerification: newCheck,
+            }
+          : msg
+      ));
+      // A new card's rows reveal once; coming back to the Bot tab later doesn't replay them
+      if (newCheck) {
+        setTimeout(() => {
+          setMessages(prev => prev.map(msg => (msg.id === targetMessageId ? { ...msg, animateVerification: false } : msg)));
+        }, REVEAL_DONE_MS);
       }
 
       if (bizResult?.verified) {
-        const successMessage: ChatMessage = {
-          id: Date.now() + 2,
-          // The card is the message: no bubble text
-          text: '',
-          sender: "support",
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          verificationMetrics: metrics,
-          animateVerification: true,
-          contactVerification: { email: contactEmail, businessId: business.id },
-        };
-        if (targetMessageId === undefined) setMessages(prev => [...prev, successMessage]);
-
         toast({
           title: "Verified!",
           description: `"${business.business_name}" is now verified.`,
         });
       } else {
-        const failMessage: ChatMessage = {
-          id: Date.now() + 2,
-          // The card is the message: no bubble text. It shows the masked contact email and,
-          // while it isn't confirmed, offers the code (or asks for a contact email first)
-          text: '',
-          sender: "support",
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          verificationMetrics: metrics,
-          animateVerification: true,
-          contactVerification: { email: contactEmail, businessId: business.id },
-        };
-        if (targetMessageId === undefined) setMessages(prev => [...prev, failMessage]);
-
         const { done, total } = verificationProgress(metrics);
         toast({
           title: "Not verified yet",
@@ -725,58 +661,159 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     } catch (error: any) {
       console.error('Verification request error:', error);
 
-      // Check again: the card stays as it was
-      if (targetMessageId !== undefined) {
-        toast({
-          title: "Couldn't check again",
-          description: error.message || 'Please try again.',
-          variant: 'destructive',
-        });
+      // A new check: its pending card becomes the error message
+      if (newCheck) {
+        setMessages(prev => prev.map(msg =>
+          msg.id === targetMessageId
+            ? {
+                id: msg.id,
+                text: `Verification failed for "${business.business_name}". ${error.message || 'Please try again.'}`,
+                sender: "support",
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              }
+            : msg
+        ));
         return;
       }
 
-      const errorMessage = {
-        id: Date.now() + 2,
-        text: `Verification failed for "${business.business_name}". ${error.message || 'Please try again.'}`,
-        sender: "support",
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      // Check again: the card stays as it was
+      toast({
+        title: "Couldn't check again",
+        description: error.message || 'Please try again.',
+        variant: 'destructive',
+      });
     }
   }, [toast]);
 
-  // Handle business selection from buttons
-  const handleBusinessSelection = useCallback(async (business: any) => {
-    if (awaitingVerificationBusinessSelection) {
-      setSelectedBusinessForVerification(business);
-      
-      const selectionMessage = {
-        id: Date.now(),
-        text: `Selected business: ${business.business_name}`,
-        sender: "user",
+  // A new check for one business: a pending card straight away, filled in when the result arrives.
+  // Afterwards the question that led here goes, so the chat reads: user message, then card
+  const startVerificationCheck = useCallback(async (business: ChatBusiness, pickerId?: number) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const removePicker = () => {
+      if (pickerId !== undefined) setMessages(prev => prev.filter(msg => msg.id !== pickerId));
+    };
+
+    if (business.is_verified || business.verification_status === 'verified') {
+      const alreadyVerifiedMessage: ChatMessage = {
+        id: Date.now() + 1,
+        text: `"${business.business_name}" is already verified! ✓`,
+        sender: "support",
+        timestamp,
+      };
+      setMessages(prev => [...prev, alreadyVerifiedMessage]);
+      removePicker();
+      return;
+    }
+
+    const pendingId = Date.now() + 1;
+    const pendingCard: ChatMessage = {
+      id: pendingId,
+      text: '',
+      sender: "support",
+      timestamp,
+      animateVerification: true,
+      verificationMetrics: {
+        pending: true,
+        contactInfoConfirmed: false,
+        totalTransactions: 0,
+        creditedTransactions: 0,
+        uniqueWallets: 0,
+        verified: false,
+        businessName: business.business_name,
+        businessId: business.id,
+      },
+    };
+    setMessages(prev => [...prev, pendingCard]);
+    await runVerification(business, pendingId, true);
+    removePicker();
+  }, [runVerification]);
+
+  // Takes back a question that was never answered, when a new flow starts
+  const dropActivePicker = useCallback(() => {
+    const picker = activePickerRef.current;
+    if (!picker) return;
+    activePickerRef.current = null;
+    setActivePickerId(null);
+    setMessages(prev => prev.filter(msg => msg.id !== picker.id));
+  }, []);
+
+  // One bubble with the question and a button per business; a choice runs onChosen
+  const openBusinessPicker = useCallback((
+    businesses: ChatBusiness[],
+    question: string,
+    onChosen: (business: ChatBusiness, pickerId: number) => Promise<void>,
+  ) => {
+    const pickerId = Date.now() + 3;
+    const pickerMessage: ChatMessage = {
+      id: pickerId,
+      text: question,
+      sender: "business-selection",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      businesses,
+    };
+    activePickerRef.current = { id: pickerId, onChosen };
+    setActivePickerId(pickerId);
+    setMessages(prev => [...prev, pickerMessage]);
+  }, []);
+
+  // A flow that needs one business: the question if there's a choice, none if there's only one
+  const chooseBusiness = useCallback((
+    businesses: ChatBusiness[],
+    question: string,
+    onChosen: (business: ChatBusiness, pickerId?: number) => Promise<void>,
+  ) => {
+    const [only] = businesses;
+    if (businesses.length === 1 && only) {
+      void onChosen(only);
+      return;
+    }
+    openBusinessPicker(businesses, question, onChosen);
+  }, [openBusinessPicker]);
+
+  // Trigger verification flow
+  const triggerVerificationFlow = useCallback(async (type: 'verification' | 'certification') => {
+    dropActivePicker();
+    const userMessage = {
+      id: Date.now(),
+      text: type === 'verification' ? 'Check verification status' : 'Check certification status',
+      sender: "user",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+
+    // Fetch user's businesses
+    const businesses = await fetchUserBusinesses();
+    setUserBusinesses(businesses);
+
+    if (businesses.length === 0) {
+      // No businesses registered
+      const noBusinessMessage = {
+        id: Date.now() + 1,
+        text: "You don't have any registered businesses yet. Please register a business first to request verification.",
+        sender: "support",
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
-      
-      setMessages(prev => [...prev, selectionMessage]);
-      
-      // Check verification status
-      if (business.is_verified || business.verification_status === 'verified') {
-        const alreadyVerifiedMessage = {
-          id: Date.now() + 1,
-          text: `"${business.business_name}" is already verified! ✓`,
-          sender: "support",
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages(prev => [...prev, alreadyVerifiedMessage]);
-        setAwaitingVerificationBusinessSelection(false);
-        return;
-      }
-      
-      // If pending from a previous attempt, allow re-triggering verification
-      await runVerification(business);
-      setAwaitingVerificationBusinessSelection(false);
+      setMessages(prev => [...prev, noBusinessMessage]);
+
+      setTimeout(() => {
+        navigate('/registration');
+      }, 2000);
+      return;
     }
-  }, [awaitingVerificationBusinessSelection, updateVerificationStatus, toast, runVerification]);
+
+    chooseBusiness(businesses, 'Which business should I check?', startVerificationCheck);
+  }, [fetchUserBusinesses, navigate, dropActivePicker, chooseBusiness, startVerificationCheck]);
+
+  // A business button in the question the flow is waiting on
+  const handleBusinessSelection = useCallback(async (business: ChatBusiness) => {
+    const picker = activePickerRef.current;
+    if (!picker) return;
+    activePickerRef.current = null;
+    setActivePickerId(null);
+    setSelectedBusinessForVerification(business);
+    await picker.onChosen(business, picker.id);
+  }, []);
 
   // "Check again" on a result card: the same business, no picker
   const checkVerificationAgain = useCallback(
@@ -804,6 +841,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
 
   // Show user's listings with statuses
   const showMyListings = useCallback(async () => {
+    dropActivePicker();
     const userMessage: ChatMessage = {
       id: Date.now(),
       text: "My listings",
@@ -838,16 +876,9 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       sender: "support",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
-    const selectionMessage: ChatMessage = {
-      id: Date.now() + 2,
-      text: "Select your business:",
-      sender: "business-selection",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      businesses,
-    };
-    setMessages(prev => [...prev, summaryMessage, selectionMessage]);
-    setAwaitingVerificationBusinessSelection(true);
-  }, [fetchUserBusinesses, navigate]);
+    setMessages(prev => [...prev, summaryMessage]);
+    openBusinessPicker(businesses, 'Select your business:', startVerificationCheck);
+  }, [fetchUserBusinesses, navigate, dropActivePicker, openBusinessPicker, startVerificationCheck]);
 
   // contact-otp: { ok } or the error_code it returned, for the card to explain
   const callContactOTP = useCallback(async (body: Record<string, unknown>): Promise<ContactOTPResult> => {
@@ -931,6 +962,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     handleAttachmentOption,
     sendVerificationRequest,
     handleBusinessSelection,
+    activePickerId,
     triggerVerificationFlow,
     triggerCertificationFlow,
     showMyListings,
