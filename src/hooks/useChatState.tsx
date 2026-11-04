@@ -157,14 +157,14 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     saveMessagesToStorage(storageKey, messages);
   }, [messages, storageKey]);
 
-  // The owner's businesses from Supabase, active or not; null if they couldn't be loaded, which
-  // isn't the same as having none
+  // The owner's businesses from Supabase, active or not. 'signed-out' with no session, and null
+  // if they couldn't be loaded: neither is the same as having none
   const fetchUserBusinesses = useCallback(async () => {
     try {
       // Ownership must use the Supabase user ID (RLS: owner_id = auth.uid()), never the Pi ID
       const { data: { session } } = await supabase.auth.getSession();
       const ownerId = session?.user?.id;
-      if (!user?.uid || !ownerId) return null;
+      if (!user?.uid || !ownerId) return 'signed-out' as const;
 
       const { data, error } = await supabase
         .from('businesses')
@@ -180,15 +180,13 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     }
   }, [user?.uid]);
 
-  const showBusinessLoadError = useCallback((flow: BusinessLoadFlow) => {
-    const errorMessage: ChatMessage = {
-      id: Date.now() + 1,
-      text: "Couldn't load your businesses. Try again.",
-      sender: "support",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      retryLoad: flow,
-    };
-    setMessages(prev => [...prev, errorMessage]);
+  // When the businesses didn't load: signing in is the way forward, or else trying again
+  const showBusinessLoadProblem = useCallback((problem: 'signed-out' | null, flow: BusinessLoadFlow) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const problemMessage: ChatMessage = problem === 'signed-out'
+      ? { id: Date.now() + 1, text: 'Sign in to see your businesses.', sender: "support", timestamp }
+      : { id: Date.now() + 1, text: "Couldn't load your businesses. Try again.", sender: "support", timestamp, retryLoad: flow };
+    setMessages(prev => [...prev, problemMessage]);
   }, []);
 
   // Update verification status in database
@@ -422,14 +420,14 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       if (rawText.includes('/certification')) {
         // Show business selection for certification
         const loaded = await fetchUserBusinesses();
-        if (!loaded) {
+        if (loaded === null) {
           toast({
             title: "Error",
             description: "Failed to fetch your businesses. Please try again.",
             variant: "destructive",
           });
         }
-        const businesses = loaded ?? [];
+        const businesses = Array.isArray(loaded) ? loaded : [];
         
         if (businesses.length === 0) {
           const noBusinessMessage = {
@@ -793,8 +791,8 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
   // Only active businesses can be checked (as on Your businesses)
   const continueVerificationFlow = useCallback(async () => {
     const businesses = await fetchUserBusinesses();
-    if (!businesses) {
-      showBusinessLoadError('verification');
+    if (!Array.isArray(businesses)) {
+      showBusinessLoadProblem(businesses, 'verification');
       return;
     }
     const active = businesses.filter(business => business.is_active);
@@ -828,7 +826,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     }
 
     chooseBusiness(active, 'Which business should I check?', startVerificationCheck);
-  }, [fetchUserBusinesses, showBusinessLoadError, navigate, chooseBusiness, startVerificationCheck]);
+  }, [fetchUserBusinesses, showBusinessLoadProblem, navigate, chooseBusiness, startVerificationCheck]);
 
   // Trigger verification flow
   const triggerVerificationFlow = useCallback(async (type: 'verification' | 'certification') => {
@@ -882,8 +880,8 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
   // downgraded can still see what they have. Only active ones can be checked from here
   const continueMyListings = useCallback(async () => {
     const businesses = await fetchUserBusinesses();
-    if (!businesses) {
-      showBusinessLoadError('listings');
+    if (!Array.isArray(businesses)) {
+      showBusinessLoadProblem(businesses, 'listings');
       return;
     }
 
@@ -917,7 +915,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     if (active.length > 0) {
       openBusinessPicker(active, 'Select one to request or recheck verification:', startVerificationCheck);
     }
-  }, [fetchUserBusinesses, showBusinessLoadError, navigate, openBusinessPicker, startVerificationCheck]);
+  }, [fetchUserBusinesses, showBusinessLoadProblem, navigate, openBusinessPicker, startVerificationCheck]);
 
   // Show user's listings with statuses
   const showMyListings = useCallback(async () => {
