@@ -40,10 +40,10 @@ const BalanceCard: React.FC<BalanceCardProps> = ({ balance, isLoading, isError }
           {piBalance.toFixed(2)} <span className="text-[26px] opacity-90">π</span>
         </p>
       )}
-      <p className="mt-1 text-sm opacity-90">Pays for plans in the app.</p>
-      <p className="text-xs leading-[17px] opacity-90">Your Pi Wallet balance stays in the Pi Wallet app.</p>
+      <p className="mt-1 text-sm opacity-95">Pays for plans in the app.</p>
+      <p className="text-xs leading-[17px] opacity-95">Your Pi Wallet balance stays in the Pi Wallet app.</p>
       {isMainnet && !isError && !isPriceLoading && (
-        <p className="mt-1 text-xs opacity-80">
+        <p className="mt-1 text-xs opacity-95">
           {usdEquivalent !== null ? `≈ $${usdEquivalent.toFixed(2)} USD` : 'USD value unavailable'}
         </p>
       )}

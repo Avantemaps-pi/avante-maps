@@ -121,7 +121,8 @@ test('testnet host: "Avante Maps balance", what it is for, the chip, and no USD 
   await expect(card.getByText('23.50')).toBeVisible();
   await expect(card.getByText('Pays for plans in the app.')).toBeVisible();
   await expect(card.getByText('Your Pi Wallet balance stays in the Pi Wallet app.')).toBeVisible();
-  await expect(card.getByText('Your Pi Wallet balance stays in the Pi Wallet app.')).toHaveCSS('opacity', '0.9');
+  await expect(card.getByText('Your Pi Wallet balance stays in the Pi Wallet app.')).toHaveCSS('opacity', '0.95');
+  await expect(card.getByText('Pays for plans in the app.')).toHaveCSS('opacity', '0.95');
   await expect(card.getByText(/USD/)).toHaveCount(0);
   await expect(card.getByText(/message/i)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /Top up/ })).toBeVisible();
@@ -149,6 +150,7 @@ test('mainnet host: no chip, and the USD line', async ({ page }) => {
   await page.goto('https://mainnet.avantemaps.com/wallet');
   const card = balanceCard(page);
   await expect(card.getByText('≈ $5.00 USD')).toBeVisible();
+  await expect(card.getByText('≈ $5.00 USD')).toHaveCSS('opacity', '0.95');
   await expect(card.getByText('Testnet Pi')).toHaveCount(0);
 });
 
