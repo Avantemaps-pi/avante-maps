@@ -28,7 +28,7 @@ const fakeSession = {
   user: { id: UID, aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() },
 };
 
-const BUSINESS = { id: 9001, business_name: 'Harbour Light Coffee', verification_status: null, is_verified: false, created_at: '2026-10-01T00:00:00Z' };
+const BUSINESS = { id: 9001, business_name: 'Harbour Light Coffee', verification_status: null, is_verified: false, is_active: true, created_at: '2026-10-01T00:00:00Z' };
 
 interface Setup {
   contactEmail?: string | null;

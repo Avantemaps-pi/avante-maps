@@ -64,6 +64,7 @@ const Communicon = () => {
     loadOwnedBusinessContact,
     checkVerificationAgain,
     activePickerId,
+    retryBusinessLoad,
     isValidatingConversation,
     conversationValidated,
     validateConversation,
@@ -324,6 +325,7 @@ const Communicon = () => {
             onVerifyContactOTP={verifyContactOTP}
             onCheckVerificationAgain={checkVerificationAgain}
             activePickerId={activePickerId}
+            onRetryBusinessLoad={retryBusinessLoad}
           />
         )}
       </div>

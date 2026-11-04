@@ -16,12 +16,18 @@ const GUEST_CHAT_KEY = `${CHAT_STORAGE_PREFIX}:guest`;
 const getChatStorageKey = (uid?: string | null) =>
   uid ? `${CHAT_STORAGE_PREFIX}:${uid}` : GUEST_CHAT_KEY;
 
+type BusinessLoadFlow = 'verification' | 'listings';
+
 type ChatMessage = {
   id: number;
   text: string;
   sender: string;
   timestamp: string;
-  businesses?: Array<{ id: number; business_name: string; verification_status?: string | null; is_verified?: boolean }>;
+  businesses?: Array<{ id: number; business_name: string; verification_status?: string | null; is_verified?: boolean; is_active?: boolean }>;
+  /** My listings: every listing, with a label on deactivated ones */
+  listings?: Array<{ id: number; name: string; status: string; inactive: boolean }>;
+  /** A failed load of the owner's businesses: what "Try again" re-runs */
+  retryLoad?: BusinessLoadFlow;
   verificationMetrics?: VerificationMetrics | undefined;
   contactVerification?: { email: string; businessId: number };
   animateVerification?: boolean;
@@ -151,19 +157,18 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     saveMessagesToStorage(storageKey, messages);
   }, [messages, storageKey]);
 
-  // Fetch user's businesses from Supabase
+  // The owner's businesses from Supabase, active or not. 'signed-out' with no session, and null
+  // if they couldn't be loaded: neither is the same as having none
   const fetchUserBusinesses = useCallback(async () => {
-    if (!user?.uid) return [];
-
     try {
       // Ownership must use the Supabase user ID (RLS: owner_id = auth.uid()), never the Pi ID
       const { data: { session } } = await supabase.auth.getSession();
       const ownerId = session?.user?.id;
-      if (!ownerId) return [];
+      if (!user?.uid || !ownerId) return 'signed-out' as const;
 
       const { data, error } = await supabase
         .from('businesses')
-        .select('id, business_name, verification_status, is_verified, created_at')
+        .select('id, business_name, verification_status, is_verified, is_active, created_at')
         .eq('owner_id', ownerId)
         .order('created_at', { ascending: true });
 
@@ -171,14 +176,18 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       return data || [];
     } catch (error) {
       console.error('Error fetching businesses:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch your businesses. Please try again.",
-        variant: "destructive",
-      });
-      return [];
+      return null;
     }
-  }, [user?.uid, toast]);
+  }, [user?.uid]);
+
+  // When the businesses didn't load: signing in is the way forward, or else trying again
+  const showBusinessLoadProblem = useCallback((problem: 'signed-out' | null, flow: BusinessLoadFlow) => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const problemMessage: ChatMessage = problem === 'signed-out'
+      ? { id: Date.now() + 1, text: 'Sign in to see your businesses.', sender: "support", timestamp }
+      : { id: Date.now() + 1, text: "Couldn't load your businesses. Try again.", sender: "support", timestamp, retryLoad: flow };
+    setMessages(prev => [...prev, problemMessage]);
+  }, []);
 
   // Update verification status in database
   const updateVerificationStatus = async (businessId: number, status: string) => {
@@ -410,7 +419,15 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       
       if (rawText.includes('/certification')) {
         // Show business selection for certification
-        const businesses = await fetchUserBusinesses();
+        const loaded = await fetchUserBusinesses();
+        if (loaded === null) {
+          toast({
+            title: "Error",
+            description: "Failed to fetch your businesses. Please try again.",
+            variant: "destructive",
+          });
+        }
+        const businesses = Array.isArray(loaded) ? loaded : [];
         
         if (businesses.length === 0) {
           const noBusinessMessage = {
@@ -770,23 +787,29 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     openBusinessPicker(businesses, question, onChosen);
   }, [openBusinessPicker]);
 
-  // Trigger verification flow
-  const triggerVerificationFlow = useCallback(async (type: 'verification' | 'certification') => {
-    dropActivePicker();
-    const userMessage = {
-      id: Date.now(),
-      text: type === 'verification' ? 'Check verification status' : 'Check certification status',
-      sender: "user",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-
-    // Fetch user's businesses
+  // After the user's message, and from "Try again": load the businesses, then ask or start.
+  // Only active businesses can be checked (as on Your businesses)
+  const continueVerificationFlow = useCallback(async () => {
     const businesses = await fetchUserBusinesses();
-    setUserBusinesses(businesses);
+    if (!Array.isArray(businesses)) {
+      showBusinessLoadProblem(businesses, 'verification');
+      return;
+    }
+    const active = businesses.filter(business => business.is_active);
+    setUserBusinesses(active);
 
-    if (businesses.length === 0) {
+    if (businesses.length > 0 && active.length === 0) {
+      const noActiveMessage: ChatMessage = {
+        id: Date.now() + 1,
+        text: "None of your businesses are active right now, so there's nothing to check. You can see them under My listings.",
+        sender: "support",
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages(prev => [...prev, noActiveMessage]);
+      return;
+    }
+
+    if (active.length === 0) {
       // No businesses registered
       const noBusinessMessage = {
         id: Date.now() + 1,
@@ -802,8 +825,22 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       return;
     }
 
-    chooseBusiness(businesses, 'Which business should I check?', startVerificationCheck);
-  }, [fetchUserBusinesses, navigate, dropActivePicker, chooseBusiness, startVerificationCheck]);
+    chooseBusiness(active, 'Which business should I check?', startVerificationCheck);
+  }, [fetchUserBusinesses, showBusinessLoadProblem, navigate, chooseBusiness, startVerificationCheck]);
+
+  // Trigger verification flow
+  const triggerVerificationFlow = useCallback(async (type: 'verification' | 'certification') => {
+    dropActivePicker();
+    const userMessage = {
+      id: Date.now(),
+      text: type === 'verification' ? 'Check verification status' : 'Check certification status',
+      sender: "user",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    await continueVerificationFlow();
+  }, [dropActivePicker, continueVerificationFlow]);
 
   // A business button in the question the flow is waiting on
   const handleBusinessSelection = useCallback(async (business: ChatBusiness) => {
@@ -839,18 +876,14 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     setMessages(prev => [...prev, userMessage, replyMessage]);
   }, []);
 
-  // Show user's listings with statuses
-  const showMyListings = useCallback(async () => {
-    dropActivePicker();
-    const userMessage: ChatMessage = {
-      id: Date.now(),
-      text: "My listings",
-      sender: "user",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-    setMessages(prev => [...prev, userMessage]);
-
+  // After the user's message, and from "Try again": every listing, active or not, so an owner who
+  // downgraded can still see what they have. Only active ones can be checked from here
+  const continueMyListings = useCallback(async () => {
     const businesses = await fetchUserBusinesses();
+    if (!Array.isArray(businesses)) {
+      showBusinessLoadProblem(businesses, 'listings');
+      return;
+    }
 
     if (businesses.length === 0) {
       const noneMessage: ChatMessage = {
@@ -864,21 +897,44 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
       return;
     }
 
-    const lines = businesses.map(b => {
+    const listings = businesses.map(b => {
       const verified = b.is_verified || b.verification_status === 'verified';
-      const status = verified ? '✓ Verified' : (b.verification_status ? `• ${b.verification_status}` : '• Not verified');
-      return `• ${b.business_name} — ${status}`;
-    }).join('\n');
+      const status = verified ? '✓ Verified' : (b.verification_status || 'Not verified');
+      return { id: b.id, name: b.business_name, status, inactive: !b.is_active };
+    });
+    const active = businesses.filter(business => business.is_active);
 
     const summaryMessage: ChatMessage = {
       id: Date.now() + 1,
-      text: `Here are your listings:\n${lines}\n\nSelect one below to request or recheck verification:`,
+      text: 'Here are your listings:',
       sender: "support",
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      listings,
     };
     setMessages(prev => [...prev, summaryMessage]);
-    openBusinessPicker(businesses, 'Select your business:', startVerificationCheck);
-  }, [fetchUserBusinesses, navigate, dropActivePicker, openBusinessPicker, startVerificationCheck]);
+    if (active.length > 0) {
+      openBusinessPicker(active, 'Select one to request or recheck verification:', startVerificationCheck);
+    }
+  }, [fetchUserBusinesses, showBusinessLoadProblem, navigate, openBusinessPicker, startVerificationCheck]);
+
+  // Show user's listings with statuses
+  const showMyListings = useCallback(async () => {
+    dropActivePicker();
+    const userMessage: ChatMessage = {
+      id: Date.now(),
+      text: "My listings",
+      sender: "user",
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setMessages(prev => [...prev, userMessage]);
+    await continueMyListings();
+  }, [dropActivePicker, continueMyListings]);
+
+  // "Try again" on a failed load: the error goes, and the flow carries on from where it stopped
+  const retryBusinessLoad = useCallback(async (messageId: number, flow: BusinessLoadFlow) => {
+    setMessages(prev => prev.filter(msg => msg.id !== messageId));
+    await (flow === 'verification' ? continueVerificationFlow() : continueMyListings());
+  }, [continueVerificationFlow, continueMyListings]);
 
   // contact-otp: { ok } or the error_code it returned, for the card to explain
   const callContactOTP = useCallback(async (body: Record<string, unknown>): Promise<ContactOTPResult> => {
@@ -963,6 +1019,7 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     sendVerificationRequest,
     handleBusinessSelection,
     activePickerId,
+    retryBusinessLoad,
     triggerVerificationFlow,
     triggerCertificationFlow,
     showMyListings,

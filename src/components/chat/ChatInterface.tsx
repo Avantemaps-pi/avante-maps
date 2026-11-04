@@ -27,6 +27,8 @@ interface ChatInterfaceProps {
     sender: string;
     timestamp: string;
     businesses?: Array<{ id: number; business_name: string; verification_status?: string | null; is_verified?: boolean }>;
+    listings?: Array<{ id: number; name: string; status: string; inactive: boolean }>;
+    retryLoad?: 'verification' | 'listings';
     verificationMetrics?: VerificationMetrics | undefined;
     contactVerification?: {
       email: string;
@@ -47,6 +49,8 @@ interface ChatInterfaceProps {
   onCheckVerificationAgain?: (businessId: number, businessName: string, messageId: number) => Promise<void>;
   /** The business question the flow is waiting on; other pickers in the chat are disabled */
   activePickerId?: number | null;
+  /** "Try again" on a failed load of the owner's businesses */
+  onRetryBusinessLoad?: (messageId: number, flow: 'verification' | 'listings') => Promise<void>;
 }
 
 const QUICK_REPLIES = [
@@ -68,6 +72,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   onVerifyContactOTP,
   onCheckVerificationAgain,
   activePickerId = null,
+  onRetryBusinessLoad,
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -161,6 +166,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     ranQuickActionRef.current = false;
   };
 
+  // Inside a message's bubble: My listings' rows, or a failed load's "Try again"
+  const bubbleContentFor = (msg: ChatInterfaceProps['messages'][number]) => {
+    if (msg.listings) {
+      return (
+        <>
+          <ul className="mt-1 space-y-1 text-sm">
+            {msg.listings.map(listing => (
+              <li key={listing.id}>
+                {listing.name} · {listing.status}
+                {listing.inactive && <span className="ml-1.5 text-xs text-muted-foreground">Inactive</span>}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs mt-1 opacity-70">{msg.timestamp}</p>
+        </>
+      );
+    }
+    const flow = msg.retryLoad;
+    if (flow && onRetryBusinessLoad) {
+      return (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-2 min-h-11"
+          onClick={() => void onRetryBusinessLoad(msg.id, flow)}
+        >
+          Try again
+        </Button>
+      );
+    }
+    return businessButtonsFor(msg);
+  };
+
   // A question's business buttons, inside its bubble; tappable only while the flow waits on it
   const businessButtonsFor = (msg: ChatInterfaceProps['messages'][number]) => {
     const businesses = msg.businesses ?? [];
@@ -217,7 +256,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             sender={msg.sender}
                             timestamp={msg.timestamp}
                           >
-                            {businessButtonsFor(msg)}
+                            {bubbleContentFor(msg)}
                           </ChatMessage>
                         )}
                         {msg.verificationMetrics && isOlderCard(msg) && (

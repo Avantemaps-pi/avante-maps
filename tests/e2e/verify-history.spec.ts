@@ -22,7 +22,7 @@ const fakeSession = {
   user: { id: mockUser.uid, aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() },
 };
 
-const HARBOUR = { id: 9001, business_name: 'Harbour Light Coffee', verification_status: null, is_verified: false, created_at: '2026-10-01T00:00:00Z' };
+const HARBOUR = { id: 9001, business_name: 'Harbour Light Coffee', verification_status: null, is_verified: false, is_active: true, created_at: '2026-10-01T00:00:00Z' };
 const TABLE_BAY = { ...HARBOUR, id: 9002, business_name: 'Table Bay Bookshop' };
 const STORAGE_MESSAGES = `avante-chat-messages-v2:${mockUser.uid}`;
 
@@ -36,8 +36,9 @@ const reply = (totalTransactions: number, creditedTransactions: number, uniqueWa
   ...extra,
 });
 
-async function setup(page: Page, opts: { businesses?: object[]; replies?: object[]; failFrom?: number; history?: object[]; verifyDelayMs?: number } = {}) {
+async function setup(page: Page, opts: { businesses?: object[]; replies?: object[]; failFrom?: number; history?: object[]; verifyDelayMs?: number; businessLoadFailures?: number; signedOut?: boolean } = {}) {
   const verifyCalls: Request[] = [];
+  let businessLoadFailures = opts.businessLoadFailures ?? 0;
   await page.route('**/pi-sdk.js', (route) => route.abort());
   await page.route('**/auth/v1/**', (route) => route.fulfill({ json: fakeSession.user }));
   for (const t of ['users', 'user_roles', 'conversations', 'messages', 'notifications']) {
@@ -47,6 +48,10 @@ async function setup(page: Page, opts: { businesses?: object[]; replies?: object
     const req = route.request();
     if ((req.headers()['accept'] ?? '').includes('vnd.pgrst.object')) {
       return route.fulfill({ json: { contact_info: { email: 'hello@harbour.example' }, contact_email_verified_for: null } });
+    }
+    if (businessLoadFailures > 0) {
+      businessLoadFailures -= 1;
+      return route.fulfill({ status: 500, json: { message: 'boom' } });
     }
     return route.fulfill({ json: opts.businesses ?? [HARBOUR] });
   });
@@ -67,14 +72,14 @@ async function setup(page: Page, opts: { businesses?: object[]; replies?: object
     ([mockKey, storageKey, user, session, messagesKey, history]) => {
       localStorage.setItem(mockKey as string, '1');
       localStorage.setItem(storageKey as string, JSON.stringify({ ...(user as object), lastAuthenticated: Date.now() }));
-      localStorage.setItem('supabase.auth.token', JSON.stringify(session));
+      if (session) localStorage.setItem('supabase.auth.token', JSON.stringify(session));
       // Only seeded once, so a reload keeps what the app saved
       if (history && !sessionStorage.getItem('seeded')) {
         localStorage.setItem(messagesKey as string, JSON.stringify(history));
         sessionStorage.setItem('seeded', '1');
       }
     },
-    [SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser, fakeSession, STORAGE_MESSAGES, opts.history ?? null],
+    [SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser, opts.signedOut ? null : fakeSession, STORAGE_MESSAGES, opts.history ?? null],
   );
   await page.goto('/communicon');
   await expect(page.getByRole('tab', { name: 'Bot' })).toBeVisible();
@@ -297,7 +302,133 @@ test('My listings keeps its picker, and a choice runs the same check', async ({ 
   await page.getByRole('button', { name: HARBOUR.business_name }).tap();
   await expect.poll(() => verifyCalls.length).toBe(1);
   await expect(cardFor(page).getByRole('heading', { name: 'Not verified yet' })).toBeVisible();
-  await expect(page.getByText('Select your business:')).toHaveCount(0);
+  await expect(page.getByText('Select one to request or recheck verification:')).toHaveCount(0);
+});
+
+const LOAD_ERROR = "Couldn't load your businesses. Try again.";
+const INACTIVE = { ...HARBOUR, id: 9003, business_name: 'Dock Road Deli', is_active: false };
+
+for (const [flow, start] of [['the verification check', 'Check verification status'], ['My listings', 'My listings']] as const) {
+  test(`a failed load in ${flow}: the error with a retry, and no redirect to Registration`, async ({ page }) => {
+    await setup(page, { businessLoadFailures: 1 });
+    await page.getByRole('button', { name: start }).tap();
+    await expect(page.getByText(LOAD_ERROR)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+    await expect(page.getByText(/don't have any registered businesses/)).toHaveCount(0);
+    // Longer than the 1.5 to 2s redirect of the no-businesses case
+    await page.waitForTimeout(2_600);
+    await expect(page).toHaveURL(/\/communicon$/);
+  });
+}
+
+for (const [flow, start] of [['the verification check', 'Check verification status'], ['My listings', 'My listings']] as const) {
+  test(`signed out in ${flow}: asks to sign in, with no Try again, no load error and no redirect`, async ({ page }) => {
+    const { verifyCalls } = await setup(page, { signedOut: true });
+    await page.getByRole('button', { name: start }).tap();
+    await expect(page.getByText('Sign in to see your businesses.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+    await expect(page.getByText(LOAD_ERROR)).toHaveCount(0);
+    await expect(page.getByText(/don't have any registered businesses/)).toHaveCount(0);
+    await page.waitForTimeout(2_600);
+    await expect(page).toHaveURL(/\/communicon$/);
+    expect(verifyCalls).toHaveLength(0);
+  });
+}
+
+test('Try again in the verification check: the error goes and the check runs, with one user message', async ({ page }) => {
+  const { verifyCalls } = await setup(page, { businessLoadFailures: 1 });
+  await page.getByRole('button', { name: 'Check verification status' }).tap();
+  await page.getByRole('button', { name: 'Try again' }).tap();
+  await expect.poll(() => verifyCalls.length).toBe(1);
+  await expect(cardFor(page).getByRole('heading', { name: 'Not verified yet' })).toBeVisible();
+  await expect(page.getByText(LOAD_ERROR)).toHaveCount(0);
+  expect(await chatLines(page)).toEqual(['Check verification status', 'card: Not verified yet']);
+});
+
+test('Try again in My listings: the error goes and the listings show', async ({ page }) => {
+  await setup(page, { businessLoadFailures: 1 });
+  await page.getByRole('button', { name: 'My listings' }).tap();
+  await page.getByRole('button', { name: 'Try again' }).tap();
+  await expect(page.getByText('Here are your listings:')).toBeVisible();
+  await expect(page.getByText(LOAD_ERROR)).toHaveCount(0);
+});
+
+test('Try again failing again: one error, still with a retry, and it can still recover', async ({ page }) => {
+  const { verifyCalls } = await setup(page, { businessLoadFailures: 2 });
+  await page.getByRole('button', { name: 'Check verification status' }).tap();
+  await page.getByRole('button', { name: 'Try again' }).tap();
+  await expect(page.getByText(LOAD_ERROR)).toHaveCount(1);
+  await page.getByRole('button', { name: 'Try again' }).tap();
+  await expect.poll(() => verifyCalls.length).toBe(1);
+  await expect(page.getByText(LOAD_ERROR)).toHaveCount(0);
+});
+
+for (const [flow, start] of [['the verification check', 'Check verification status'], ['My listings', 'My listings']] as const) {
+  test(`genuinely no businesses in ${flow}: today's message, then Registration`, async ({ page }) => {
+    await setup(page, { businesses: [] });
+    await page.getByRole('button', { name: start }).tap();
+    await expect(page.getByText(/You don't have any registered businesses yet/)).toBeVisible();
+    await expect(page.getByText(LOAD_ERROR)).toHaveCount(0);
+    await page.waitForURL('**/registration');
+  });
+}
+
+test('one active business and a deactivated one: no question, the check starts for the active one', async ({ page }) => {
+  const { verifyCalls } = await setup(page, { businesses: [INACTIVE, HARBOUR] });
+  await page.getByRole('button', { name: 'Check verification status' }).tap();
+  await expect.poll(() => verifyCalls.length).toBe(1);
+  expect((verifyCalls[0]!.postDataJSON() as { business_id: number }).business_id).toBe(HARBOUR.id);
+  await expect(page.getByText('Which business should I check?')).toHaveCount(0);
+  await expect(cardFor(page, HARBOUR.business_name)).toBeVisible();
+});
+
+test('two active businesses and a deactivated one: the question offers only the active two', async ({ page }) => {
+  await setup(page, { businesses: [HARBOUR, INACTIVE, TABLE_BAY] });
+  await page.getByRole('button', { name: 'Check verification status' }).tap();
+  await expect(page.getByText('Which business should I check?')).toBeVisible();
+  await expect(page.getByRole('button', { name: HARBOUR.business_name })).toBeVisible();
+  await expect(page.getByRole('button', { name: TABLE_BAY.business_name })).toBeVisible();
+  await expect(page.getByRole('button', { name: INACTIVE.business_name })).toHaveCount(0);
+});
+
+test('every business deactivated: says so, no check, and no redirect to Registration', async ({ page }) => {
+  const { verifyCalls } = await setup(page, { businesses: [INACTIVE] });
+  await page.getByRole('button', { name: 'Check verification status' }).tap();
+  await expect(page.getByText(/None of your businesses are active right now/)).toBeVisible();
+  await expect(page.getByText(/don't have any registered businesses/)).toHaveCount(0);
+  await page.waitForTimeout(2_600);
+  await expect(page).toHaveURL(/\/communicon$/);
+  expect(verifyCalls).toHaveLength(0);
+});
+
+test('My listings shows a deactivated business with an "Inactive" label, and offers only active ones to check', async ({ page }) => {
+  const { verifyCalls } = await setup(page, { businesses: [HARBOUR, INACTIVE] });
+  await page.getByRole('button', { name: 'My listings' }).tap();
+  const rows = page.getByRole('listitem').filter({ hasText: / · / });
+  await expect(rows).toHaveCount(2);
+  const deactivated = rows.filter({ hasText: INACTIVE.business_name });
+  const active = rows.filter({ hasText: HARBOUR.business_name });
+  const label = deactivated.getByText('Inactive', { exact: true });
+  await expect(label).toBeVisible();
+  await expect(label).toHaveCSS('font-size', '12px');
+  await expect(label).toHaveClass(/text-muted-foreground/);
+  await expect(active.getByText('Inactive', { exact: true })).toHaveCount(0);
+  // One separator: no leading bullet, dash or second bullet
+  await expect(deactivated).toHaveText(`${INACTIVE.business_name} · Not verifiedInactive`);
+  await expect(active).toHaveText(`${HARBOUR.business_name} · Not verified`);
+
+  await expect(page.getByRole('button', { name: INACTIVE.business_name })).toHaveCount(0);
+  await page.getByRole('button', { name: HARBOUR.business_name }).tap();
+  await expect.poll(() => verifyCalls.length).toBe(1);
+  expect((verifyCalls[0]!.postDataJSON() as { business_id: number }).business_id).toBe(HARBOUR.id);
+});
+
+test('My listings with every business deactivated: shows them, with nothing to pick', async ({ page }) => {
+  await setup(page, { businesses: [INACTIVE] });
+  await page.getByRole('button', { name: 'My listings' }).tap();
+  await expect(page.getByText('Here are your listings:')).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ hasText: INACTIVE.business_name }).getByText('Inactive', { exact: true })).toBeVisible();
+  await expect(page.getByText('Select one to request or recheck verification:')).toHaveCount(0);
 });
 
 test('a reload during a check leaves no card stuck on its spinners, and the reveal doesn\'t replay', async ({ page }) => {
