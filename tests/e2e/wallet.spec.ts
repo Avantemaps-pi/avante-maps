@@ -223,8 +223,8 @@ test('an owner with a payout wallet: shortened, Copy, and Edit opens Update busi
   const edit = wallets(page).getByRole('link', { name: /^Edit/ });
   await expect(edit).toHaveText('Edit');
   expect(Math.round((await edit.boundingBox())!.height)).toBe(44);
-  await edit.tap();
-  await page.waitForURL('**/update-registration/56');
+  await expect(edit).toHaveAttribute('aria-label', 'Edit the Harbour Light Coffee payout wallet');
+  await expect(edit).toHaveAttribute('href', '/update-registration/56?field=piWalletAddress');
 });
 
 test('no payout wallet: "No payout wallet yet" and Add, with no Copy', async ({ page }) => {
@@ -234,7 +234,8 @@ test('no payout wallet: "No payout wallet yet" and Add, with no Copy', async ({ 
   await expect(wallets(page).getByRole('button', { name: /Dock Road Deli/ })).toHaveCount(0);
   const add = wallets(page).getByRole('link', { name: /Add/ });
   await expect(add).toHaveText('Add');
-  await expect(add).toHaveAttribute('href', '/update-registration/57');
+  await expect(add).toHaveAttribute('aria-label', 'Add a payout wallet for Dock Road Deli');
+  await expect(add).toHaveAttribute('href', '/update-registration/57?field=piWalletAddress');
 });
 
 test('an inactive business is labelled, and stays listed', async ({ page }) => {
@@ -496,6 +497,133 @@ test('a source failing shows the error, not a partial list', async ({ page }) =>
   await expect(activity(page).getByRole('alert')).toContainText('Failed to load activity');
   await expect(activityRows(page)).toHaveCount(0);
   await expect(activity(page).getByRole('button', { name: 'Refresh activity' })).toBeVisible();
+});
+
+// ---- Edit and Add open the Pi wallet address field
+
+const HOURS = Object.fromEntries(
+  ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => [day, { open: '08:00', close: '18:00', closed: false }]),
+);
+const fullRow = (row: { id: number; business_name: string; pi_wallet_address: string | null; is_active: boolean }) => ({
+  ...row,
+  owner_id: mockUser.uid,
+  category: 'Coffee Shop',
+  business_description: 'Coffee by the harbour, roasted in small batches every week.',
+  city: 'Cape Town',
+  country: 'South Africa',
+  images: [],
+  is_verified: false,
+  is_certified: false,
+  verification_status: null,
+  created_at: '2026-10-01T00:00:00Z',
+  lat: -33.92,
+  lng: 18.421,
+  business_types: ['Food'],
+  keywords: [],
+  location: 'Cape Town',
+  street_address: '12 Dock Road',
+  state: 'Western Cape',
+  zip_code: '8001',
+  coordinates: null,
+  contact_info: { first_name: 'Thandi', last_name: 'Mokoena', email: 'hello@harbour.example', phone: '+27215550123', website: 'https://harbour.pinet.com' },
+  hours: HOURS,
+});
+
+async function setupOwner(page: Page) {
+  const context = await setup(page, { businesses: [BUSINESS, NO_PAYOUT] });
+  // Wallet lists both; Update business asks for one by id
+  await page.route('**/rest/v1/businesses*', (route) => {
+    const id = new URL(route.request().url()).searchParams.get('id');
+    if (!id) return route.fallback();
+    const row = [BUSINESS, NO_PAYOUT].find((business) => `eq.${business.id}` === id);
+    return route.fulfill({ json: row ? [fullRow(row)] : [] });
+  });
+  return context;
+}
+
+const walletField = (page: Page) => page.locator('#piWalletAddress');
+const updateTab = (page: Page, name: string) => page.getByRole('tab', { name, exact: true });
+
+async function expectOnWalletField(page: Page, id: number) {
+  await expect(updateTab(page, 'Details')).toHaveAttribute('aria-selected', 'true');
+  await expect(walletField(page)).toBeFocused();
+  await expect(walletField(page)).toBeInViewport();
+  await expect.poll(() => new URL(page.url()).search).toBe('');
+  expect(new URL(page.url()).pathname).toBe(`/update-registration/${id}`);
+  // The navigation that dropped the param mustn't scroll back to the top afterwards
+  await page.waitForTimeout(500);
+  await expect(walletField(page)).toBeFocused();
+  await expect(walletField(page)).toBeInViewport();
+}
+
+test('Edit lands on Details with the Pi wallet address focused, in view, and no param left', async ({ page }) => {
+  await setupOwner(page);
+  await page.goto('/wallet');
+  await wallets(page).getByRole('link', { name: /^Edit/ }).tap();
+  await page.waitForURL('**/update-registration/56*');
+  await expectOnWalletField(page, 56);
+  await expect(walletField(page)).toHaveValue(PAYOUT_WALLET);
+});
+
+test('Add does the same, on an empty field', async ({ page }) => {
+  await setupOwner(page);
+  await page.goto('/wallet');
+  await wallets(page).getByRole('link', { name: /^Add/ }).tap();
+  await page.waitForURL('**/update-registration/57*');
+  await expectOnWalletField(page, 57);
+  await expect(walletField(page)).toHaveValue('');
+});
+
+test('from a Wallet page scrolled down: still lands on the field', async ({ page }) => {
+  await setupOwner(page);
+  await page.goto('/wallet');
+  const add = wallets(page).getByRole('link', { name: /^Add/ });
+  await expect(add).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 150));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await add.tap();
+  await page.waitForURL('**/update-registration/57*');
+  await expectOnWalletField(page, 57);
+});
+
+test('the header back arrow returns to Wallet, and so does browser Back', async ({ page }) => {
+  await setupOwner(page);
+  await page.goto('/wallet');
+  const edit = wallets(page).getByRole('link', { name: /^Edit/ });
+  await edit.tap();
+  await page.waitForURL('**/update-registration/56*');
+  await expectOnWalletField(page, 56);
+  await page.getByRole('button', { name: 'Go back' }).tap();
+  await page.waitForURL('**/wallet');
+
+  await edit.tap();
+  await page.waitForURL('**/update-registration/56*');
+  await expectOnWalletField(page, 56);
+  await page.goBack();
+  await page.waitForURL('**/wallet');
+  await expect(wallets(page)).toBeVisible();
+});
+
+test('a reload after landing opens normally, on the first tab', async ({ page }) => {
+  await setupOwner(page);
+  await page.goto('/wallet');
+  await wallets(page).getByRole('link', { name: /^Edit/ }).tap();
+  await page.waitForURL('**/update-registration/56*');
+  await expectOnWalletField(page, 56);
+  await page.reload();
+  await expect(updateTab(page, 'Owner')).toHaveAttribute('aria-selected', 'true');
+  await expect(walletField(page)).toHaveCount(0);
+});
+
+test('a typed change still asks before leaving', async ({ page }) => {
+  await setupOwner(page);
+  await page.goto('/wallet');
+  await wallets(page).getByRole('link', { name: /^Edit/ }).tap();
+  await page.waitForURL('**/update-registration/56*');
+  await expectOnWalletField(page, 56);
+  await walletField(page).fill('GCHANGED');
+  await page.getByRole('button', { name: 'Go back' }).tap();
+  await expect(page.getByRole('alertdialog', { name: 'Unsaved Changes' })).toBeVisible();
 });
 
 test('no sideways scroll, with a long business name and a full page', async ({ page }) => {

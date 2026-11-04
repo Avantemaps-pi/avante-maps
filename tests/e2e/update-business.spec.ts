@@ -228,6 +228,27 @@ test('other scrolling pages keep their header in view, with no sideways scroll',
   expect(sideways).toBe(0);
 });
 
+for (const search of ['', '?field=nonsense', '?field=constructor']) {
+  test(`opened with "${search}": the first tab, and nothing focused or changed`, async ({ page }) => {
+    await setup(page);
+    await page.goto(`/update-registration/${ID}${search}`);
+    await expect(tab(page, 'Owner')).toHaveAttribute('aria-selected', 'true');
+    await expect(tab(page, 'Details')).toHaveAttribute('aria-selected', 'false');
+    await expect(page.locator('#piWalletAddress')).toHaveCount(0);
+    expect(new URL(page.url()).search).toBe(search);
+  });
+}
+
+test('opened directly on the field: Go back has nowhere earlier, so goes to Your businesses', async ({ page }) => {
+  await setup(page);
+  await page.goto(`/update-registration/${ID}?field=piWalletAddress`);
+  await expect(tab(page, 'Details')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#piWalletAddress')).toBeFocused();
+  await expect.poll(() => new URL(page.url()).search).toBe('');
+  await page.getByRole('button', { name: 'Go back' }).tap();
+  await page.waitForURL('**/registered-business');
+});
+
 test('a direct load: Go back goes to Your businesses, not out of the app', async ({ page }) => {
   await setup(page);
   await page.goto(`/update-registration/${ID}`);
