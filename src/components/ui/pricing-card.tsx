@@ -138,6 +138,7 @@ export function PricingCard({
           "mt-8 w-full text-base py-6",
           isCurrentPlan && "border-primary text-primary hover:bg-primary/10"
         )}
+        data-plan-button={tier.id}
         onClick={onSubscribe}
         disabled={isSubscribing || disabled}
       >
