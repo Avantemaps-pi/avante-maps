@@ -8,6 +8,7 @@
 
 export { approvePayment } from './approvePayment';
 export { completePayment } from './completePayment';
+export { payFromBalance } from './payFromBalance';
 export { getPaymentStatus } from './paymentStatus';
 export { cleanupStalePayments } from './cleanupStalePayments';
 export { paymentStore } from './types';

@@ -7,7 +7,7 @@ export const WALLET_BALANCE_QUERY_KEY = ['wallet-balance'];
 export const useWalletBalance = () => {
   const { isAuthenticated } = useAuth();
 
-  const { data: balance = 0, isLoading, refetch } = useQuery({
+  const { data: balance = 0, isLoading, isError, refetch } = useQuery({
     queryKey: WALLET_BALANCE_QUERY_KEY,
     queryFn: async () => {
       // Always read a fresh session user — never a stale context value.
@@ -25,5 +25,5 @@ export const useWalletBalance = () => {
     gcTime: 5 * 60 * 1000,
   });
 
-  return { balance, isLoading, refetch };
+  return { balance, isLoading, isError, refetch };
 };

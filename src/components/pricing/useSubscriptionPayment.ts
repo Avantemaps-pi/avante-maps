@@ -57,24 +57,31 @@ export const useSubscriptionPayment = () => {
     }
   };
 
-  const handleSubscribe = async (tier: string) => {
-    if (tier === "individual" || tier.includes("coming-soon")) return;
+  // Whether this plan can be paid for now. If not, it tells the user why
+  const prepareCheckout = async (tier: string): Promise<boolean> => {
+    if (tier === "individual" || tier.includes("coming-soon")) return false;
 
     if (!isAuthenticated) {
       toast.info("Please log in to upgrade your subscription");
       await login();
-      return;
+      return false;
     }
 
     if (user?.subscriptionTier === tier) {
       toast.info("You are already subscribed to this plan");
-      return;
+      return false;
     }
 
     if (isPaymentLocked) {
       toast.info("A payment is already being processed. Please wait for it to finish.");
-      return;
+      return false;
     }
+
+    return true;
+  };
+
+  const handleSubscribe = async (tier: string) => {
+    if (!(await prepareCheckout(tier))) return;
 
     setIsProcessingPayment(true);
     polling.reset();
@@ -173,6 +180,7 @@ export const useSubscriptionPayment = () => {
     },
     selectedFrequency,
     handleFrequencyChange,
+    prepareCheckout,
     handleSubscribe,
     updateUserSubscription,
     handleCleanupPayments,

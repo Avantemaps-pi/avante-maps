@@ -11,6 +11,7 @@ import { TIERS } from '@/components/pricing/pricingTiers';
 import { useAuth } from '@/context/auth';
 import { useSubscriptionPayment } from '@/components/pricing/useSubscriptionPayment';
 import { PaymentOutcomeBanner } from '@/components/pricing/PaymentOutcomeBanner';
+import PlanCheckoutSheet from '@/components/pricing/PlanCheckoutSheet';
 import MetaTags from '@/components/seo/MetaTags';
 import { getOrigin } from '@/utils/browserEnv';
 
@@ -28,11 +29,14 @@ const Pricing = () => {
   const [previousPlan, setPreviousPlan] = useState("");
   const [showDialog, setShowDialog] = useState(false);
   const lastAttemptedTier = useRef<string | null>(null);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [checkoutTier, setCheckoutTier] = useState<string | null>(null);
   // Get subscription payment utilities
   const {
     userSubscriptionTier,
     selectedFrequency,
     handleFrequencyChange,
+    prepareCheckout,
     handleSubscribe,
     updateUserSubscription,
     isProcessingPayment,
@@ -72,6 +76,24 @@ const Pricing = () => {
       // Update the subscription tier and refresh the UI
       await updateUserSubscription('individual');
     }
+  };
+
+  // A paid plan opens the checkout sheet, which offers the balance and the Pi Wallet
+  const handlePaidPlanClick = async (tierId: string) => {
+    if (!(await prepareCheckout(tierId))) return;
+    setCheckoutTier(tierId);
+    setCheckoutOpen(true);
+  };
+
+  const handlePayWithPi = (tierId: string) => {
+    lastAttemptedTier.current = tierId;
+    handleSubscribe(tierId);
+  };
+
+  // Focus returns to the plan's button, also on browsers where a tap doesn't focus it
+  const handleCheckoutCloseAutoFocus = (event: Event) => {
+    event.preventDefault();
+    document.querySelector<HTMLElement>(`[data-plan-button="${checkoutTier}"]`)?.focus();
   };
 
   // Handle dialog confirmation
@@ -129,8 +151,7 @@ const Pricing = () => {
             if (tier.id === 'individual') {
               handleIndividualPlanClick();
             } else {
-              lastAttemptedTier.current = tier.id;
-              handleSubscribe(tier.id);
+              handlePaidPlanClick(tier.id);
             }
           },
           isLoading: isProcessingPayment || (paymentPolling.isPolling && !paymentPolling.isTerminal),
@@ -141,6 +162,15 @@ const Pricing = () => {
         onFrequencyChange={handleBillingChange}
       />
       
+      <PlanCheckoutSheet
+        open={checkoutOpen}
+        onOpenChange={setCheckoutOpen}
+        tierId={checkoutTier}
+        frequency={selectedFrequency}
+        onPayWithPi={handlePayWithPi}
+        onCloseAutoFocus={handleCheckoutCloseAutoFocus}
+      />
+
       {/* Downgrade Confirmation Dialog */}
       <AlertDialog open={showDialog} onOpenChange={setShowDialog}>
         <AlertDialogContent>

@@ -24,12 +24,12 @@ interface QuickActionsSheetProps {
 
 // A gentler open than the shared sheet's defaults: 650ms in, 350ms out. With reduced motion,
 // no slide, just a 150ms fade
-const SHEET_MOTION =
+export const SHEET_MOTION =
   'data-[state=open]:duration-[650ms] data-[state=open]:ease-[cubic-bezier(0.32,0.72,0,1)] data-[state=closed]:duration-[350ms] data-[state=closed]:ease-in ' +
   'motion-reduce:data-[state=open]:duration-150 motion-reduce:data-[state=closed]:duration-150 ' +
   'motion-reduce:data-[state=open]:slide-in-from-bottom-0 motion-reduce:data-[state=closed]:slide-out-to-bottom-0 ' +
   'motion-reduce:data-[state=open]:fade-in-0 motion-reduce:data-[state=closed]:fade-out-0';
-const OVERLAY_MOTION =
+export const OVERLAY_MOTION =
   'data-[state=open]:duration-[650ms] data-[state=closed]:duration-[350ms] motion-reduce:data-[state=open]:duration-150 motion-reduce:data-[state=closed]:duration-150';
 
 /** CommuniCon's "Quick actions" bottom sheet, opened from the + in the message box */
