@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Input } from '@/components/ui/input';
-import { Search, MapPin, Store, BadgeCheck } from 'lucide-react';
+import { Search, MapPin, Store, BadgeCheck, Loader2 } from 'lucide-react';
 // Lightweight debounce (replaces lodash/debounce to drop vulnerable transitive deps)
 function debounce<T extends (...args: any[]) => void>(fn: T, wait: number) {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -36,6 +36,8 @@ interface SearchBarProps {
   businesses?: Place[];
   mapBounds?: MapBounds;
   countrycodes?: string;
+  /** The map's businesses are loading: a spinner and "Loading businesses…" in the box. It stays usable */
+  loading?: boolean;
 }
 
 const SearchBar: React.FC<SearchBarProps> = ({
@@ -47,7 +49,8 @@ const SearchBar: React.FC<SearchBarProps> = ({
   autocompleteMode = 'business',
   businesses = [],
   mapBounds,
-  countrycodes
+  countrycodes,
+  loading = false
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
@@ -262,7 +265,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
           id="searchBarInput"
           name="searchBarInput"
           type="text"
-          placeholder={placeholder}
+          placeholder={loading ? 'Loading businesses…' : placeholder}
           aria-label="Search businesses"
           value={searchTerm}
           onChange={handleInputChange}
@@ -271,9 +274,15 @@ const SearchBar: React.FC<SearchBarProps> = ({
           autoComplete="off"
         />
         <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-          <Search className="h-[18px] w-[18px] text-muted-foreground" />
+          {loading ? (
+            <Loader2 className="h-[18px] w-[18px] text-primary motion-safe:animate-spin" aria-hidden="true" />
+          ) : (
+            <Search className="h-[18px] w-[18px] text-muted-foreground" />
+          )}
         </div>
       </form>
+      {/* Always in the page, so the text appearing is what gets announced */}
+      <div role="status" className="sr-only">{loading ? 'Loading businesses…' : ''}</div>
 
       {enableAutocomplete && showDropdown && currentSuggestions.length > 0 && (
         <div className="absolute top-full left-0 right-0 mt-2 bg-popover text-popover-foreground border border-border rounded-lg shadow-lg max-h-[300px] overflow-y-auto z-[2000]">

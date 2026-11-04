@@ -2,7 +2,7 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from '@/lib/router-compat';
 import { useBusinessData } from '@/hooks/useBusinessData';
-import { AlertCircle, Loader2, Menu, SearchX, Store } from 'lucide-react';
+import { AlertCircle, Menu, SearchX, Store } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StateBlock, type StateBlockProps } from '@/components/ui/state-block';
 import SearchBar from '@/components/map/SearchBar';
@@ -502,6 +502,7 @@ const Index = () => {
                 enableAutocomplete={true}
                 autocompleteMode="business"
                 businesses={places}
+                loading={mapState === 'loading'}
               />
             </div>
           </div>
@@ -511,17 +512,6 @@ const Index = () => {
             onSelect={setSelectedCategoryId}
             className="-ml-1 pl-1 -mr-4 pr-4 -my-1 pointer-events-auto"
           />
-          {mapState === 'loading' && (
-            <div className="flex justify-center">
-              <div
-                role="status"
-                className="flex h-10 items-center gap-2 rounded-full border border-border bg-surface-float px-4 shadow-float"
-              >
-                <Loader2 className="h-[18px] w-[18px] text-primary motion-safe:animate-spin" aria-hidden="true" />
-                <span className="text-sm font-semibold text-foreground">Loading businesses…</span>
-              </div>
-            </div>
-          )}
           <MapAreaLabel
             name={area?.name ?? null}
             parentName={parentArea?.name ?? null}
@@ -564,7 +554,7 @@ const Index = () => {
         )}
 
         <Suspense fallback={null}>
-          <AddBusinessButton selectedPlace={selectedPlace} hiddenByStrip={!!strip} />
+          <AddBusinessButton selectedPlace={selectedPlace} hiddenByStrip={!!strip} mapLoading={mapState === 'loading'} />
         </Suspense>
         {/* Top of the right-hand column: FAB (bottom 96px, 56px tall) + 12px gap + zoom group (90px) + 12px gap = 266px.
             Strip open: its top (76px + 124px = 200px) sits 48px above the FAB's (152px), so 314px */}

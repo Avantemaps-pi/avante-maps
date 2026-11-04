@@ -212,7 +212,7 @@ test.describe('375x812', () => {
       await route.fallback();
     });
     await page.goto('/');
-    await expect(page.getByText('Loading businesses…')).toBeVisible();
+    await expect(page.locator('input[aria-label="Search businesses"]')).toHaveAttribute('placeholder', 'Loading businesses…');
     await expect(listButton(page)).toHaveCount(0);
     await zoomToPins(page, SIX);
     await expect(listButton(page)).toHaveText('List · 6');
