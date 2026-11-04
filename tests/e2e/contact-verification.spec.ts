@@ -173,7 +173,8 @@ test('"Check again" re-runs verify-business for the same business, without the p
   await expect.poll(() => verifyCalls.length).toBe(2);
   expect(verifyCalls.map((r) => (r.postDataJSON() as { business_id: number }).business_id)).toEqual([BUSINESS.id, BUSINESS.id]);
   await expect(page.getByText('Select your business:')).toHaveCount(1);
-  await expect(page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' })).toHaveCount(2);
+  // The card updates in place
+  await expect(page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' })).toHaveCount(1);
 });
 
 test('confirming the code: the row turns Confirmed, the count goes up by one, no stale reason', async ({ page }) => {
@@ -198,7 +199,7 @@ test('confirming the code: the row turns Confirmed, the count goes up by one, no
   }
 });
 
-test('confirming the last missing check runs verification again by itself: the new card says Verified', async ({ page }) => {
+test('confirming the last missing check runs verification again by itself: the card turns Verified, in place', async ({ page }) => {
   const { verifyCalls } = await openVerification(page, {
     // Everything met except the contact email; once confirmed, the server says Verified
     counts: { totalTransactions: 120, creditedTransactions: 80, uniqueWallets: 14 },
@@ -213,12 +214,23 @@ test('confirming the last missing check runs verification again by itself: the n
   expect((verifyCalls[1]!.postDataJSON() as { business_id: number }).business_id).toBe(BUSINESS.id);
   await expect(card(page).getByRole('heading', { name: 'Verified' })).toBeVisible();
 
-  // The first card, all done but not verified by its own result, never says "Not verified yet"
   await expect(page.getByRole('heading', { name: 'Not verified yet' })).toHaveCount(0);
-  const first = page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' }).first();
-  await expect(first.getByRole('heading', { name: 'Ready to verify' })).toBeVisible();
-  await expect(first.getByText('Harbour Light Coffee · All done')).toBeVisible();
-  await expect(first.getByText("Everything's done. Tap Check again to get verified.")).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' })).toHaveCount(1);
+});
+
+test('all done but not verified by its result: "Ready to verify", never "Not verified yet"', async ({ page }) => {
+  const { verifyCalls } = await openVerification(page, {
+    counts: { totalTransactions: 120, creditedTransactions: 80, uniqueWallets: 14 },
+    // The automatic check doesn't verify, as if the server hasn't caught up
+    verifyReplies: [{}, { contactConfirmed: true, reason: null }],
+  });
+  await openCodeDialog(page);
+  await sendAndEnterCode(page);
+  await expect.poll(() => verifyCalls.length).toBe(2);
+  await expect(card(page).getByRole('heading', { name: 'Ready to verify' })).toBeVisible();
+  await expect(card(page).getByText('Harbour Light Coffee · All done')).toBeVisible();
+  await expect(card(page).getByText("Everything's done. Tap Check again to get verified.")).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Not verified yet' })).toHaveCount(0);
 });
 
 const SEND_ERRORS: [string, number, string][] = [

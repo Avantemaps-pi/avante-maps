@@ -146,7 +146,7 @@ const Communicon = () => {
     if (!metrics || metrics.verified) return;
     const progress = verificationProgress({ ...metrics, contactInfoConfirmed: true });
     if (progress.done === progress.total) {
-      void checkVerificationAgain(confirmed.businessId, metrics.businessName);
+      void checkVerificationAgain(confirmed.businessId, metrics.businessName, latest.id);
     }
   };
 

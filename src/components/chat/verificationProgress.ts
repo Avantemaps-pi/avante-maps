@@ -27,3 +27,13 @@ export function verificationProgress(
   const done = [contactDone, transactionsDone, walletsDone].filter(Boolean).length;
   return { contactDone, transactionsDone, walletsDone, done, total: 3 };
 }
+
+/** A check's time in the device's format: "today, 17:36" or "3 Nov, 01:37"; null if there's none */
+export function formatCheckTime(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const isToday = date.toDateString() === new Date().toDateString();
+  return `${isToday ? 'today' : date.toLocaleDateString([], { day: 'numeric', month: 'short' })}, ${time}`;
+}

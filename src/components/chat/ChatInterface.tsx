@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import ChatModeToggle from './ChatModeToggle';
 import ChatMessage from './ChatMessage';
 import BusinessSelectionButtons from './BusinessSelectionButtons';
 import VerificationResultCard, { VerificationMetrics } from './VerificationResultCard';
+import VerificationHistoryRow from './VerificationHistoryRow';
 import type { ContactOTPResult } from './ContactOTPVerification';
 import MessagesPanel from '@/components/messages/MessagesPanel';
 import { useLocation } from '@/lib/router-compat';
@@ -43,7 +44,7 @@ interface ChatInterfaceProps {
   onSendContactOTP?: (email: string, businessId: number) => Promise<ContactOTPResult>;
   onVerifyContactOTP?: (email: string, otp: string, businessId: number) => Promise<ContactOTPResult>;
   /** Re-runs verification for a result card's business */
-  onCheckVerificationAgain?: (businessId: number, businessName: string) => Promise<void>;
+  onCheckVerificationAgain?: (businessId: number, businessName: string, messageId: number) => Promise<void>;
 }
 
 const QUICK_REPLIES = [
@@ -68,10 +69,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // "Check again" for a result card's business (none if the card doesn't know which)
-  const checkAgainFor = (metrics: VerificationMetrics) => {
+  const checkAgainFor = (metrics: VerificationMetrics, messageId: number) => {
     const businessId = metrics.businessId;
     if (!onCheckVerificationAgain || businessId == null) return undefined;
-    return () => onCheckVerificationAgain(businessId, metrics.businessName);
+    return () => onCheckVerificationAgain(businessId, metrics.businessName, messageId);
   };
   // Keep the newest message in view when the keyboard shrinks the list
   const stickToBottomRef = useStickToBottom();
@@ -83,10 +84,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const isInitialMount = useRef(true);
   const location = useLocation();
 
+  // Only for a new message: a card updating in place stays where it is
+  const previousCount = useRef(0);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: isInitialMount.current ? 'instant' : 'smooth' });
+    if (messages.length > previousCount.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: isInitialMount.current ? 'instant' : 'smooth' });
+    }
+    previousCount.current = messages.length;
     isInitialMount.current = false;
   }, [messages]);
+
+  // The newest result for each business gets the full card; older ones fold
+  const latestCardIds = useMemo(() => {
+    const latest = new Map<number, number>();
+    for (const msg of messages) {
+      const businessId = msg.verificationMetrics && (msg.verificationMetrics.businessId ?? msg.contactVerification?.businessId);
+      if (businessId != null) latest.set(businessId, msg.id);
+    }
+    return latest;
+  }, [messages]);
+  const isOlderCard = (msg: ChatInterfaceProps['messages'][number]) => {
+    const businessId = msg.verificationMetrics?.businessId ?? msg.contactVerification?.businessId;
+    return businessId != null && latestCardIds.get(businessId) !== msg.id;
+  };
 
   // The bot list is unmounted on the Messages tab; coming back, open it at the newest message
   // (messages haven't changed, so the effect above doesn't run). After layout, no animation
@@ -196,7 +216,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             timestamp={msg.timestamp}
                           />
                         )}
-                        {msg.verificationMetrics && (
+                        {msg.verificationMetrics && isOlderCard(msg) && (
+                          <div className={msg.text ? 'mt-2' : undefined}>
+                            <VerificationHistoryRow
+                              metrics={msg.verificationMetrics}
+                              contactEmail={msg.contactVerification?.email}
+                              timestamp={msg.timestamp}
+                            />
+                          </div>
+                        )}
+                        {msg.verificationMetrics && !isOlderCard(msg) && (
                           <div className={msg.text ? 'mt-2' : undefined}>
                             <VerificationResultCard
                               metrics={msg.verificationMetrics}
@@ -204,10 +233,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                               contactBusinessId={msg.contactVerification?.businessId}
                               onSendContactOTP={onSendContactOTP}
                               onVerifyContactOTP={onVerifyContactOTP}
-                              onCheckAgain={checkAgainFor(msg.verificationMetrics)}
+                              onCheckAgain={checkAgainFor(msg.verificationMetrics, msg.id)}
                               animate={msg.animateVerification ?? false}
                             />
-                            {!msg.text && <p className="mt-1 text-xs text-muted-foreground">{msg.timestamp}</p>}
+                            {!msg.text && !msg.verificationMetrics.checkedAt && <p className="mt-1 text-xs text-muted-foreground">{msg.timestamp}</p>}
                           </div>
                         )}
                         {renderBusinessSelectionButtons(msg)}
