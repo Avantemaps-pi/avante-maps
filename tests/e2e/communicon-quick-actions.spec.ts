@@ -27,7 +27,7 @@ async function setup(page: Page) {
     await page.route(`**/rest/v1/${t}*`, (route) => route.fulfill({ json: [] }));
   }
   await page.route('**/rest/v1/businesses*', (route) =>
-    route.fulfill({ json: [{ id: 9001, business_name: 'Harbour Light Coffee', verification_status: null, is_verified: false, created_at: '2026-10-01T00:00:00Z' }] }),
+    route.fulfill({ json: [{ id: 9001, business_name: 'Harbour Light Coffee', verification_status: null, is_verified: false, is_active: true, created_at: '2026-10-01T00:00:00Z' }] }),
   );
   await page.route('**/functions/v1/chat-ai', (route) =>
     route.fulfill({
