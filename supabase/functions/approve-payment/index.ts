@@ -2,6 +2,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
+import { AMOUNT_TOLERANCE, getExpectedPlanPi } from '../_shared/prices.ts';
 import {
   getOrCreateLifecycleId,
   makeLogger,
@@ -207,6 +208,23 @@ Deno.serve(async (req) => {
       });
     }
 
+    // A plan's price is checked before the user can sign. No row is written if it can't be
+    let expectedPlanPi: number | null = null;
+    if (paymentRequest.metadata.subscriptionTier) {
+      const tier = paymentRequest.metadata.subscriptionTier;
+      const freq = paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly';
+      const expected = await getExpectedPlanPi(supabaseClient, tier, freq);
+      if (!expected.ok && expected.error === 'invalid_tier') {
+        log.warn(`${FN}.verify.unknown_tier`, { stage: 'validation', tier, freq });
+        return respond({ success: false, message: 'Invalid subscription tier' }, 400);
+      }
+      if (!expected.ok) {
+        log.error(`${FN}.verify.pi_price_unavailable`, { stage: 'validation' });
+        return respond({ success: false, message: 'Price service unavailable' }, 503);
+      }
+      expectedPlanPi = expected.expectedPi;
+    }
+
     if (!existingPayment) {
       const { error } = await supabaseClient
         .from('payments')
@@ -233,6 +251,85 @@ Deno.serve(async (req) => {
         return respond({ success: false, message: 'Payment processing failed. Please try again.' }, 500);
       }
       log.transition('none', 'pending', { idempotent: error?.code === '23505' });
+    }
+
+    // Set for a plan: stored with the plan it was checked for, so complete-payment can hold the
+    // payment to both. A retry may send different metadata from the first attempt's row
+    let approvedPlanFields: { approved_amount_pi: number; metadata: typeof paymentRequest.metadata } | null = null;
+
+    if (expectedPlanPi !== null) {
+      // The amount the user would sign, from Pi, never from the request body
+      let piAmount: number | null = null;
+      try {
+        const piGetResp = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Key ${piApiKey}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (piGetResp.ok) {
+          const piPayment = await piGetResp.json();
+          const amt = Number(piPayment?.amount);
+          if (Number.isFinite(amt) && amt > 0) piAmount = amt;
+        } else {
+          log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', status: piGetResp.status });
+        }
+      } catch (getErr) {
+        log.warn(`${FN}.pi_api.get_payment_exception`, {
+          stage: 'pi_api',
+          message: getErr instanceof Error ? getErr.message : String(getErr),
+        });
+      }
+
+      // Left pending, so approving again can still work
+      if (piAmount === null) {
+        log.error(`${FN}.verify.amount_unavailable`, { stage: 'pi_api' });
+        return respond({ success: false, message: 'Unable to verify payment amount' }, 502);
+      }
+
+      if (piAmount < expectedPlanPi * AMOUNT_TOLERANCE) {
+        log.warn(`${FN}.verify.amount_mismatch`, { stage: 'validation', piAmount, expectedPi: expectedPlanPi });
+        try {
+          const cancelResponse = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}/cancel`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Key ${piApiKey}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          if (!cancelResponse.ok) {
+            log.warn(`${FN}.pi_api.cancel_failed`, { stage: 'pi_api', status: cancelResponse.status });
+          }
+        } catch (cancelError) {
+          log.warn(`${FN}.pi_api.cancel_exception`, {
+            stage: 'pi_api',
+            message: cancelError instanceof Error ? cancelError.message : String(cancelError),
+          });
+        }
+
+        await supabaseClient.from('payments').update({
+          status: {
+            approved: false,
+            verified: false,
+            completed: false,
+            cancelled: true,
+            error: 'amount_mismatch',
+          },
+          updated_at: new Date().toISOString(),
+        }).eq('payment_id', paymentRequest.paymentId);
+        log.transition('pending', 'cancelled', { terminalReason: 'cancelled', source: 'amount_mismatch' });
+
+        return respond({
+          success: false,
+          error_code: 'amount_mismatch',
+          message: 'The payment amount does not match the plan price',
+          expectedPi: expectedPlanPi,
+          paymentId: paymentRequest.paymentId,
+        }, 400);
+      }
+
+      approvedPlanFields = { approved_amount_pi: piAmount, metadata: paymentRequest.metadata };
     }
 
     log.info(`${FN}.pi_api.call`, { stage: 'pi_api' });
@@ -262,6 +359,7 @@ Deno.serve(async (req) => {
               completed: false,
               cancelled: false,
             },
+            ...(approvedPlanFields ?? {}),
             updated_at: new Date().toISOString(),
           }).eq('payment_id', paymentRequest.paymentId);
 
@@ -296,6 +394,7 @@ Deno.serve(async (req) => {
           completed: false,
           cancelled: false,
         },
+        ...(approvedPlanFields ?? {}),
         updated_at: new Date().toISOString(),
       }).eq('payment_id', paymentRequest.paymentId);
       log.transition('pending', 'approved');

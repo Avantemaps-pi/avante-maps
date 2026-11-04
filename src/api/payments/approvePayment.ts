@@ -7,6 +7,7 @@
  */
 import { supabase } from '@/integrations/supabase/client';
 import { PaymentRequest, PaymentResponse } from './types';
+import { readFunctionError } from './functionError';
 import {
   correlationHeaders,
   generateLifecycleId,
@@ -53,12 +54,14 @@ export const approvePayment = async (
         body: JSON.stringify(req),
         headers: correlationHeaders(lifecycleId),
       })
-      .then(({ data, error }) => {
+      .then(async ({ data, error }) => {
         if (error) {
           emit('error', `${FN}.request.error`, base, { message: error.message });
+          const refused = await readFunctionError(error);
           return {
             success: false,
-            message: `Failed to approve payment: ${error.message}`,
+            message: refused.message ?? `Failed to approve payment: ${error.message}`,
+            ...(refused.error_code ? { error_code: refused.error_code } : {}),
             paymentId: req.paymentId,
           } as PaymentResponse;
         }

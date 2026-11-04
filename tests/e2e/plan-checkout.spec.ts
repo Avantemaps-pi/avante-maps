@@ -1,6 +1,6 @@
 /**
  * Picking a paid plan on Pricing opens a sheet offering the Avante Maps balance and the Pi Wallet.
- * The balance is only spent through pay-from-balance, and the Pi Wallet path is the existing flow.
+ * The balance is only spent through pay-from-balance, and the Pi Wallet path charges the π shown.
  *
  * 375x812 with the sandbox session, a fake Supabase session, mocked pay-from-balance and balance RPC,
  * and a stubbed Pi SDK that records createPayment.
@@ -27,16 +27,51 @@ const PRICE_USD = 0.0767;
 type PayResponse = { status: number; json: Record<string, unknown> };
 const PAID: PayResponse = { status: 200, json: { success: true, balance: 34.81, amountPi: 65.19, tier: 'small-business', frequency: 'monthly' } };
 
-async function setup(page: Page, options: { balance?: number | 'never' | 'fails'; pay?: PayResponse; holdPay?: boolean } = {}) {
+const PIPELINE_OK: PayResponse = { status: 200, json: { success: true, message: 'ok', paymentId: 'pid-1' } };
+
+async function setup(
+  page: Page,
+  options: {
+    balance?: number | 'never' | 'fails';
+    pay?: PayResponse;
+    holdPay?: boolean;
+    priceFails?: boolean;
+    /** Answers from the server. With these the mocked Pi SDK runs its callbacks, as the real one does */
+    approve?: PayResponse | (() => PayResponse);
+    complete?: PayResponse;
+    /** What payment-status reports while polling */
+    rowStatus?: Record<string, unknown>;
+  } = {},
+) {
   const payCalls: { body: Record<string, unknown>; headers: Record<string, string> }[] = [];
   const balances: unknown[] = [];
+  const approveCalls: Record<string, unknown>[] = [];
+  const completeCalls: Record<string, unknown>[] = [];
+  const price = { usd: PRICE_USD };
   let releasePay = () => {};
   const payHeld = new Promise<void>((resolve) => (releasePay = resolve));
 
   await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
   await page.route('**/auth/v1/**', (route) => route.fulfill({ json: session.user }));
   await mockMap(page, NEARBY_BUSINESSES);
-  await page.route('**/rest/v1/pi_price*', (route) => route.fulfill({ json: { price_usd: PRICE_USD, updated_at: '2026-11-04T00:00:00Z' } }));
+  await page.route('**/rest/v1/pi_price*', (route) =>
+    options.priceFails
+      ? route.fulfill({ status: 500, json: { message: 'boom' } })
+      : route.fulfill({ json: { price_usd: price.usd, updated_at: '2026-11-04T00:00:00Z' } }),
+  );
+  await page.route('**/functions/v1/approve-payment', (route) => {
+    approveCalls.push(route.request().postDataJSON() as Record<string, unknown>);
+    const answer = typeof options.approve === 'function' ? options.approve() : (options.approve ?? PIPELINE_OK);
+    return route.fulfill({ status: answer.status, json: answer.json });
+  });
+  await page.route('**/functions/v1/complete-payment', (route) => {
+    completeCalls.push(route.request().postDataJSON() as Record<string, unknown>);
+    const answer = options.complete ?? PIPELINE_OK;
+    return route.fulfill({ status: answer.status, json: answer.json });
+  });
+  await page.route('**/functions/v1/payment-status', (route) =>
+    route.fulfill({ json: { success: true, status: options.rowStatus ?? { approved: true, completed: false, cancelled: false } } }),
+  );
   await page.route('**/rest/v1/rpc/get_wallet_balance*', async (route) => {
     balances.push(options.balance);
     if (options.balance === 'never') return; // Stays loading
@@ -50,22 +85,39 @@ async function setup(page: Page, options: { balance?: number | 'never' | 'fails'
     return route.fulfill({ status: response.status, json: response.json });
   });
   await page.addInitScript((s) => localStorage.setItem('supabase.auth.token', JSON.stringify(s)), session);
-  await page.addInitScript(() => {
-    const w = window as unknown as { Pi: object; __piInitialized: boolean; __piPayments: unknown[] };
-    w.__piPayments = [];
-    w.__piInitialized = true;
-    w.Pi = {
-      init: () => undefined,
-      authenticate: () => Promise.resolve({ accessToken: 'pi', user: { uid: 'pi-uid', username: 'SandboxUser' } }),
-      createPayment: (data: unknown) => {
-        w.__piPayments.push(data);
-      },
-    };
-  });
-  return { payCalls, balances, releasePay };
+  await page.addInitScript(
+    ({ runCallbacks, approvalFails }) => {
+      const w = window as unknown as { Pi: object; __piInitialized: boolean; __piPayments: unknown[] };
+      w.__piPayments = [];
+      w.__piInitialized = true;
+      type Callbacks = {
+        onReadyForServerApproval: (id: string) => Promise<void>;
+        onReadyForServerCompletion: (id: string, txid: string) => Promise<void>;
+      };
+      w.Pi = {
+        init: () => undefined,
+        authenticate: () => Promise.resolve({ accessToken: 'pi', user: { uid: 'pi-uid', username: 'SandboxUser' } }),
+        createPayment: (data: unknown, callbacks: Callbacks) => {
+          w.__piPayments.push(data);
+          if (!runCallbacks) return;
+          void (async () => {
+            await callbacks.onReadyForServerApproval('pid-1');
+            // A refused approval never reaches signing
+            if (!approvalFails) await callbacks.onReadyForServerCompletion('pid-1', 'abc123');
+          })();
+        },
+      };
+    },
+    {
+      runCallbacks: options.approve !== undefined || options.complete !== undefined,
+      approvalFails: typeof options.approve === 'object' && options.approve.status !== 200,
+    },
+  );
+  return { payCalls, balances, releasePay, approveCalls, completeCalls, price };
 }
 
-const piPayments = (page: Page) => page.evaluate(() => (window as unknown as { __piPayments: { metadata: Record<string, string> }[] }).__piPayments);
+const piPayments = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __piPayments: { amount: number; memo: string; metadata: Record<string, string> }[] }).__piPayments);
 const planButton = (page: Page) => page.locator('[data-plan-button="small-business"]');
 const sheet = (page: Page) => page.getByRole('dialog');
 const balanceRadio = (page: Page) => sheet(page).getByRole('radio', { name: /Avante Maps balance/ });
@@ -258,6 +310,129 @@ for (const [name, close] of [
     expect(await piPayments(page)).toEqual([]);
   });
 }
+
+test('Continue in Pi Wallet charges the π shown in the sheet, not the USD price', async ({ page }) => {
+  const { approveCalls, completeCalls } = await setup(page, { balance: 3.2, complete: PIPELINE_OK });
+  await openSheet(page);
+  await expect(sheet(page).getByText('$5.00 a month · 65.19 π today')).toBeVisible();
+  await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
+  await expect.poll(async () => (await piPayments(page)).length).toBe(1);
+  const payment = (await piPayments(page))[0]!;
+  expect(payment.amount).toBe(65.19);
+  expect(payment.memo).toBe('Small Business plan (monthly)');
+  await expect.poll(() => completeCalls.length).toBe(1);
+  expect(approveCalls[0]).toMatchObject({ amount: 65.19 });
+  expect(completeCalls[0]).toMatchObject({ amount: 65.19 });
+  await expect(page.getByText(/Successfully subscribed/)).toBeVisible();
+});
+
+test('yearly in the Pi Wallet: rounded up, and the sheet shows what will be charged', async ({ page }) => {
+  // $48 at $0.0767 is 625.8148 π
+  await setup(page, { balance: 3.2 });
+  await openPricing(page);
+  await page.getByRole('button', { name: /Yearly/ }).tap();
+  await expect(page.getByText('π 625.81')).toBeVisible();
+  await planButton(page).tap();
+  await expect(sheet(page).getByText('$48.00 a year · 625.82 π today')).toBeVisible();
+  await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
+  await expect.poll(async () => (await piPayments(page)).length).toBe(1);
+  const payment = (await piPayments(page))[0]!;
+  expect(payment.amount).toBe(625.82);
+  expect(payment.memo).toBe('Small Business plan (yearly)');
+  expect(payment.metadata).toMatchObject({ frequency: 'annual' });
+});
+
+test('the amount shown follows the method: nearest for the balance, rounded up for the Pi Wallet', async ({ page }) => {
+  await setup(page, { balance: 1000 });
+  await openPricing(page);
+  await page.getByRole('button', { name: /Yearly/ }).tap();
+  await expect(page.getByText('π 625.81')).toBeVisible();
+  await planButton(page).tap();
+  await expect(sheet(page).getByText('$48.00 a year · 625.81 π today')).toBeVisible();
+  await expect(sheet(page).getByRole('button', { name: 'Pay 625.81 π from balance' })).toBeVisible();
+  await piRadio(page).check();
+  await expect(sheet(page).getByText('$48.00 a year · 625.82 π today')).toBeVisible();
+});
+
+test('Pi price unavailable: both rows and the button disabled, with the message', async ({ page }) => {
+  await setup(page, { balance: 100, priceFails: true });
+  await page.goto('/pricing');
+  await expect(planButton(page)).toBeVisible();
+  // Hydrated once a tap opens the sheet
+  await expect(async () => {
+    await planButton(page).tap();
+    await expect(sheet(page)).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  await expect(sheet(page).getByText('Price unavailable right now. Try again in a minute.')).toBeVisible();
+  await expect(piRadio(page)).toBeDisabled();
+  await expect(piRadio(page)).not.toBeChecked();
+  await expect(piRow(page)).toHaveCSS('opacity', '0.6');
+  await expect(balanceRadio(page)).toBeDisabled();
+  await expect(balanceRadio(page)).not.toBeChecked();
+  await expect(sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' })).toBeDisabled();
+  // No made-up amount from the fallback rate
+  await expect(sheet(page).getByText('$5.00 a month · … π today')).toBeVisible();
+  expect(await piPayments(page)).toEqual([]);
+});
+
+test('amount_mismatch: a toast, no completion, no banner, and the sheet reopens at the fresh price', async ({ page }) => {
+  const { completeCalls, price } = await setup(page, {
+    balance: 3.2,
+    approve: { status: 400, json: { success: false, error_code: 'amount_mismatch', message: 'The payment amount does not match the plan price', expectedPi: 70 } },
+    rowStatus: { approved: false, completed: false, cancelled: true, error: 'amount_mismatch' },
+  });
+  await openSheet(page);
+  await expect(sheet(page).getByText('$5.00 a month · 65.19 π today')).toBeVisible();
+  price.usd = 0.0714; // The cron moved it: $5 is now 70.03 π, rounded up
+  await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
+  await expect(page.getByText('The price changed. Please try again.')).toBeVisible();
+  await expect(sheet(page).getByText('$5.00 a month · 70.03 π today')).toBeVisible();
+  await expect(page.getByText('Payment cancelled')).toHaveCount(0);
+  expect(completeCalls).toEqual([]);
+  // And paying again asks for the new amount
+  await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
+  await expect.poll(async () => (await piPayments(page)).length).toBe(2);
+  expect((await piPayments(page))[1]!.amount).toBe(70.03);
+});
+
+test("plan_not_activated: the server's message, no success toast or banner", async ({ page }) => {
+  const message = 'Payment received, but your plan could not be activated. Please contact support.';
+  await setup(page, {
+    balance: 3.2,
+    complete: { status: 500, json: { success: false, error_code: 'plan_not_activated', message } },
+    // As live: the row says completed, which is what the poller reads
+    rowStatus: { approved: true, verified: true, completed: true, cancelled: false, error: 'plan_not_activated' },
+  });
+  await openSheet(page);
+  await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
+  await expect(page.getByText(message)).toBeVisible();
+  await expect(page.getByText(/Successfully subscribed/)).toHaveCount(0);
+  await expect(page.getByText('Payment completed')).toHaveCount(0);
+  await expect(page.getByText(/your subscription is active/)).toHaveCount(0);
+  // The poller has had time to report the row as completed
+  await page.waitForTimeout(3000);
+  await expect(page.getByText('Payment completed')).toHaveCount(0);
+});
+
+test('a refused completion for another reason is an error, not a success', async ({ page }) => {
+  await setup(page, { balance: 3.2, complete: { status: 400, json: { success: false, message: 'Payment amount does not match subscription price' } } });
+  await openSheet(page);
+  await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
+  await expect(page.getByText('Payment amount does not match subscription price')).toBeVisible();
+  await expect(page.getByText(/Successfully subscribed/)).toHaveCount(0);
+});
+
+test('Try again on the banner reopens the sheet, rather than paying an amount of its own', async ({ page }) => {
+  await setup(page, { balance: 3.2, complete: PIPELINE_OK, rowStatus: { approved: false, completed: false, cancelled: true } });
+  await page.route('**/functions/v1/complete-payment', (route) => route.abort());
+  await openSheet(page);
+  await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
+  await expect(page.getByText('Payment cancelled')).toBeVisible();
+  const paymentsBefore = (await piPayments(page)).length;
+  await page.getByRole('button', { name: /try again|retry/i }).tap();
+  await expect(sheet(page)).toBeVisible();
+  expect((await piPayments(page)).length).toBe(paymentsBefore);
+});
 
 test('logged out: asked to log in, with no sheet', async ({ page }) => {
   const { payCalls } = await setup(page, { balance: 100 });
