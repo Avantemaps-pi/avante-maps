@@ -11,7 +11,7 @@
  * user, so the sandbox mock session (honoured on localhost only) is used,
  * as in reauth-false-success.spec.ts.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 
 const SANDBOX_MOCK_KEY = 'avante_sandbox_mock_session';
 const STORAGE_KEY = 'avante_maps_auth';

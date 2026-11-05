@@ -7,7 +7,7 @@
  *
  * Sandbox mock session; the map's outside calls are mocked.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, NEARBY_BUSINESSES, mockUser } from './helpers/mapMocks';
 
 const SUPABASE = 'https://xvpwbocwasbtzrzrxyvu.supabase.co';

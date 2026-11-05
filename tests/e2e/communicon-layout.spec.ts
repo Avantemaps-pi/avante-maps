@@ -7,7 +7,7 @@
  * mocked. The sandbox mock session (honoured on localhost only) signs in, as
  * in keyboard-open.spec.ts.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 
 const SANDBOX_MOCK_KEY = 'avante_sandbox_mock_session';
 const STORAGE_KEY = 'avante_maps_auth';

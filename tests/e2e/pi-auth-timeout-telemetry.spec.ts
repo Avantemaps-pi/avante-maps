@@ -32,7 +32,7 @@
  * stubbing pattern from reauth-false-success.spec.ts, but the stub's
  * authenticate() never resolves or rejects instead of rejecting immediately).
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/fixtures';
 
 // Generous budget: the 60s PI_AUTH_TIMEOUT_MS watchdog only starts once
 // requestAuthPermissions + the SDK-ready checks have run, so wall-clock time

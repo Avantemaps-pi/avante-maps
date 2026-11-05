@@ -11,7 +11,7 @@
  * timeout that surfaces an error card with Try again / Dismiss, and
  * appReady always settling so the overlay can never latch.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/fixtures';
 
 // Generous budget: the 60s PI_AUTH_TIMEOUT_MS watchdog only starts once
 // requestAuthPermissions + the SDK-ready checks have run, so wall-clock time

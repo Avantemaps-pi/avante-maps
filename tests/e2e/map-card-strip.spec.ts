@@ -8,7 +8,7 @@
  * only), both through helpers/mapMocks.ts. The map is moved to zoom 17, where pins
  * stop clustering, so every business has its own pin.
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Page, type Locator } from './helpers/fixtures';
 import { CENTRE, mockMap, mockUser, pin, zoomToPins } from './helpers/mapMocks';
 
 const photo = (n: number) =>

@@ -5,7 +5,7 @@
  * 375x812 with the sandbox session, a fake Supabase session and mocked Supabase. The ledger mock
  * applies the query's filter, so a client that asked for deposits too would get them.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, NEARBY_BUSINESSES, mockUser, STORAGE_KEY } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });

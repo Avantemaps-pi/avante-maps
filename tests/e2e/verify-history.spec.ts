@@ -6,7 +6,7 @@
  * 375x812 with the sandbox session and a fake Supabase session. verify-business and contact-otp
  * are mocked.
  */
-import { test, expect, type Page, type Request } from '@playwright/test';
+import { test, expect, type Page, type Request } from './helpers/fixtures';
 import { SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });

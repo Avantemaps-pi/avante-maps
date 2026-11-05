@@ -10,7 +10,7 @@
  * The map needs a signed-in user, so the sandbox mock session (honoured on
  * localhost only) is used, as in reauth-false-success.spec.ts.
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Page, type Locator } from './helpers/fixtures';
 
 const SANDBOX_MOCK_KEY = 'avante_sandbox_mock_session';
 const STORAGE_KEY = 'avante_maps_auth';

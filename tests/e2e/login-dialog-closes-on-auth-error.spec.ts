@@ -14,7 +14,7 @@
  * this test — Index.tsx unmounts LandingPage (and its dialog) as soon as
  * isLoading flips true, which masks the bug.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/fixtures';
 
 // The real 60s PI_AUTH_TIMEOUT_MS watchdog starts only after the permission
 // and SDK-ready checks, so allow headroom past 60s (matches

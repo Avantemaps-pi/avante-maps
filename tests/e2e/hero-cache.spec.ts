@@ -19,7 +19,14 @@
  * images as uncached Vite modules (/src/assets/…?import), so it always fails
  * there and is skipped.
  */
-import { test, expect, Response, Request } from '@playwright/test';
+import { test, expect, Response, Request } from './helpers/fixtures';
+
+// The one spec that needs live data: it checks that the real business photos a deployed preview
+// serves from Storage come from the browser cache on a second visit. Mocking them would test
+// nothing. It only runs with PREVIEW_URL set
+test.use({
+  allowLiveSupabase: ['POST /rest/v1/rpc/get_public_business_info', 'GET /storage/v1/object/*'],
+});
 
 // Production builds add a content hash: avante-icon-144-pwxlNFwe.webp
 const HERO_LOGO_RE = /avante-icon-\d+(-[\w-]+)?\.webp(\?|$)/i;

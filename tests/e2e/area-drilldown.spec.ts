@@ -7,7 +7,7 @@
  * city Riverton, Riverton the suburb Hillcrest. Each contains its parent's
  * centre, so tapping the middle of the map after each fly goes one level deeper.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { AREA_FIXTURES, areaCentre, mockMap, NEARBY_BUSINESSES, pin, zoomToPins, CENTRE } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });

@@ -5,7 +5,7 @@
  * 375x812 with the sandbox session, a fake Supabase session, mocked pay-from-balance and balance RPC,
  * and a stubbed Pi SDK that records createPayment.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, NEARBY_BUSINESSES, mockUser } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });

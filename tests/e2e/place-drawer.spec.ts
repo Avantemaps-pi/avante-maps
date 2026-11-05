@@ -12,7 +12,7 @@
  * sandbox mock session (honoured on localhost only) is used. Both come from
  * helpers/mapMocks.ts.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, mockUser } from './helpers/mapMocks';
 
 const photo = (n: number) =>

@@ -4,7 +4,7 @@
  *
  * 375x812 with mocked map data. The business list is held until the test releases it.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, NEARBY_BUSINESSES } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
