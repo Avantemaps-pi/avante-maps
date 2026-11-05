@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
-import { getExpectedPlanPi } from '../_shared/prices.ts';
+import { getExpectedPlanPi, roundUpPi } from '../_shared/prices.ts';
 import {
   getOrCreateLifecycleId,
   makeLogger,
@@ -82,8 +82,8 @@ Deno.serve(async (req) => {
       return respond({ success: false, message: 'Price service unavailable' }, 503);
     }
 
-    // To 2 decimals, the amount the Pricing page shows
-    const amountPi = Number(expected.expectedPi.toFixed(2));
+    // Rounded up to 0.01, the amount the Pricing page shows
+    const amountPi = roundUpPi(expected.expectedPi);
 
     const { data: balance, error: payError } = await supabaseClient.rpc('pay_plan_from_balance', {
       p_user_id: userId,

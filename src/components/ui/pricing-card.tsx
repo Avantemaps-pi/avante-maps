@@ -40,13 +40,13 @@ export function PricingCard({
   isCurrentPlan
 }: PricingCardProps) {
   const {
-    convertUsdToPi,
+    convertUsdToPiRoundedUp,
     isLoading: isPriceLoading
   } = usePiPrice();
 
   const price = tier.price[paymentFrequency as keyof typeof tier.price];
   const isCustom = typeof price === "string";
-  const piPrice = !isCustom && typeof price === 'number' ? convertUsdToPi(price) : null;
+  const piPrice = !isCustom && typeof price === 'number' ? convertUsdToPiRoundedUp(price) : null;
 
   return (
     <div id={id} className="">
