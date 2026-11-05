@@ -251,11 +251,29 @@ test('a business owner with no conversations: the copy names the selected busine
   await expect(page.getByRole('button', { name: 'Find a business' })).toHaveCount(0);
 });
 
-test('signed out: unchanged', async ({ page }) => {
+test('signed out: "Sign in to use messages." with a 44px Sign in button that starts the login', async ({ page }) => {
   await setup(page, { signedOut: true });
+  // Pi present (as in the Pi Browser), so login asks it to authenticate
+  await page.addInitScript(() => {
+    const w = window as unknown as { Pi: object; __piInitialized: boolean; __authenticateCalls: number };
+    w.__authenticateCalls = 0;
+    w.__piInitialized = true;
+    w.Pi = {
+      init: () => undefined,
+      authenticate: () => {
+        w.__authenticateCalls += 1;
+        return new Promise(() => {});
+      },
+    };
+  });
   await page.goto('/communicon');
   await expectOn(page, 'Messages');
   await expect(page.getByText('Sign in to use messages.')).toBeVisible();
+  const signIn = page.getByRole('button', { name: 'Sign in', exact: true });
+  expect(Math.round((await signIn.boundingBox())!.height)).toBe(44);
+  await expect(signIn).toHaveClass(/bg-primary/);
+  await signIn.tap();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __authenticateCalls: number }).__authenticateCalls)).toBeGreaterThan(0);
 });
 
 test('signed in, on a direct load: "Sign in to use messages." never shows', async ({ page }) => {
