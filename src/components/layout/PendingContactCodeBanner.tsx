@@ -48,7 +48,7 @@ const PendingContactCodeBanner: React.FC = () => {
     if (location.pathname === '/communicon') {
       window.dispatchEvent(new Event(OPEN_PENDING_CONTACT_CODE_EVENT));
     } else {
-      navigate('/communicon');
+      navigate('/communicon', { state: { chatMode: 'ai' } });
     }
   };
 
