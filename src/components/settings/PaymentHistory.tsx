@@ -81,6 +81,9 @@ function deriveStatus(status: PaymentStatusJson | null): { label: string; bad: b
   if (status?.completed && status.error === 'plan_not_activated') {
     return { label: 'Paid · plan not activated', bad: true, ...settled, needsSupport: true };
   }
+  if (status?.completed && status.error === 'amount_mismatch_after_completion') {
+    return { label: "Paid · didn't match the price", bad: true, ...settled, needsSupport: true };
+  }
   if (status?.completed) return { label: 'Completed', bad: false, ...settled };
   if (status?.cancelled) {
     return { label: status.error === 'amount_mismatch' ? 'Cancelled · price changed' : 'Cancelled', bad: true, ...settled, cancelled: true };
