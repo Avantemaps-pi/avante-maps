@@ -20,7 +20,26 @@ const fakeSession = {
   user: { id: UID, aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() },
 };
 
+// Requests that reached the real Supabase project: every test ends checking there were none.
+// verify-business wasn't mocked, so the check ran against the live function with the fake token,
+// got a 401, and the card turned into "Verification failed" whenever that answer came back
+// before the test looked
+const unmocked = new WeakMap<Page, string[]>();
+test.afterEach(async ({ page }) => {
+  expect(unmocked.get(page) ?? [], 'requests to the real Supabase project').toEqual([]);
+});
+
+const reply = { verified: false, contactConfirmed: false, reason: 'Contact email not confirmed', totalTransactions: 13, creditedTransactions: 4, uniqueWallets: 9 };
+
 async function setup(page: Page) {
+  // Registered first, so it only sees what no other route handles
+  const leaked: string[] = [];
+  unmocked.set(page, leaked);
+  await page.route('https://xvpwbocwasbtzrzrxyvu.supabase.co/**', (route) => {
+    const url = new URL(route.request().url());
+    leaked.push(`${route.request().method()} ${url.pathname}`);
+    return route.abort();
+  });
   await page.route('**/pi-sdk.js', (route) => route.abort());
   await page.route('**/auth/v1/**', (route) => route.fulfill({ json: fakeSession.user }));
   for (const t of ['users', 'user_roles', 'conversations', 'messages', 'notifications']) {
@@ -29,6 +48,10 @@ async function setup(page: Page) {
   await page.route('**/rest/v1/businesses*', (route) =>
     route.fulfill({ json: [{ id: 9001, business_name: 'Harbour Light Coffee', verification_status: null, is_verified: false, is_active: true, created_at: '2026-10-01T00:00:00Z' }] }),
   );
+  await page.route('**/functions/v1/verify-business', (route) => {
+    const { business_id: id } = route.request().postDataJSON() as { business_id: number };
+    return route.fulfill({ json: { success: true, results: [{ id, name: 'Harbour Light Coffee', ...reply }] } });
+  });
   await page.route('**/functions/v1/chat-ai', (route) =>
     route.fulfill({
       status: 200,
@@ -164,6 +187,21 @@ test.describe('375x812', () => {
     await expect(sheet(page)).toHaveCount(0);
     // One business: the check starts straight away
     await expect(page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' })).toBeVisible();
+  });
+
+  test('after a bot reply, the verification card fills in and stays: the reply does not overwrite it', async ({ page }) => {
+    await setup(page);
+    await sendMessage(page, 'How do I add photos?');
+    await expect(page.getByText('Open Your businesses from the menu and tap Update.')).toBeVisible();
+    await openSheet(page);
+    await sheet(page).getByRole('button', { name: /Check verification status/ }).tap();
+    const card = page.getByRole('region', { name: 'Verification progress for Harbour Light Coffee' });
+    await expect(card.getByRole('heading', { name: 'Not verified yet' })).toBeVisible();
+    await page.waitForTimeout(2_000);
+    await expect(card).toBeVisible();
+    await expect(page.getByText(/Verification failed/)).toHaveCount(0);
+    // The reply is still there too, before the check
+    await expect(page.getByText('Open Your businesses from the menu and tap Update.')).toBeVisible();
   });
 
   test('+ → "Message a business" switches to the Messages tab', async ({ page }) => {
