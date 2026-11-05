@@ -156,7 +156,7 @@ test('tapping empty map closes the strip and the + button comes back', async ({ 
   await expect(fab).not.toHaveAttribute('inert', '');
 });
 
-test('while the strip is open, Locate, zoom and the OSM credit clear the strip and each other', async ({ page }) => {
+test('while the strip is open, Locate and zoom clear the strip and each other', async ({ page }) => {
   await openMap(page);
   await tapPin(page, 'Table Bay Bookshop');
   await page.waitForTimeout(500);
@@ -164,7 +164,6 @@ test('while the strip is open, Locate, zoom and the OSM credit clear the strip a
     strip: (await page.locator('[data-strip-card]').first().boundingBox())!,
     locate: (await page.locator('button[aria-label="Show my location"]').boundingBox())!,
     zoom: (await page.locator('div:has(> div > button[aria-label="Zoom in"])').boundingBox())!,
-    osm: (await page.locator('.leaflet-control-attribution').boundingBox())!,
   };
   const overlap = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
     a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -174,8 +173,106 @@ test('while the strip is open, Locate, zoom and the OSM credit clear the strip a
       expect(overlap(boxes[names[i]!], boxes[names[j]!]), `${names[i]} overlaps ${names[j]}`).toBe(false);
   // 12px gaps above the strip
   expect(Math.round(boxes.strip.y - (boxes.zoom.y + boxes.zoom.height))).toBeGreaterThanOrEqual(12);
-  expect(Math.round(boxes.strip.y - (boxes.osm.y + boxes.osm.height))).toBeGreaterThanOrEqual(12);
   expect(Math.round(boxes.zoom.y - (boxes.locate.y + boxes.locate.height))).toBeGreaterThanOrEqual(12);
+});
+
+// ---- The OpenStreetMap credit stays just above the bottom nav
+
+const credit = (page: Page) => page.locator('.leaflet-control-attribution');
+const boxOf = (page: Page, selector: string) =>
+  page.evaluate((sel) => {
+    const r = document.querySelector(sel)!.getBoundingClientRect();
+    return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+  }, selector);
+const LOCATE = 'button[aria-label="Show my location"]';
+const ZOOM_IN = 'button[aria-label="Zoom in"]';
+const LIST = '[data-map-list-button]';
+const STRIP = '[data-map-strip]';
+
+test('strip closed: the credit shows, just above the bottom nav', async ({ page }) => {
+  await openMap(page);
+  await expect(credit(page)).toBeVisible();
+  await expect(credit(page)).toHaveCSS('opacity', '1');
+  await expect(credit(page)).toContainText('OpenStreetMap');
+  const box = (await credit(page).boundingBox())!;
+  const nav = (await page.locator('nav').filter({ hasText: 'Discover' }).boundingBox())!;
+  expect(box.y + box.height).toBeLessThanOrEqual(nav.y);
+  expect(nav.y - (box.y + box.height)).toBeLessThanOrEqual(12);
+});
+
+test('strip open: the credit fades in place, and nothing else moves', async ({ page }) => {
+  await openMap(page);
+  await expect(credit(page)).toHaveCSS('opacity', '1');
+  const before = await boxOf(page, '.leaflet-control-attribution');
+  await tapPin(page, 'Table Bay Bookshop');
+  await expect(credit(page)).toHaveCSS('opacity', '0');
+  await expect(credit(page)).toHaveCSS('pointer-events', 'none');
+  expect(await boxOf(page, '.leaflet-control-attribution')).toEqual(before);
+  // Where each sat with the strip open before this change
+  await page.waitForTimeout(500);
+  expect(await boxOf(page, STRIP)).toEqual([0, 612, 375, 124]);
+  expect(await boxOf(page, LIST)).toEqual([16, 556, 105, 44]);
+  expect(await boxOf(page, LOCATE)).toEqual([315, 454, 44, 44]);
+  expect(await boxOf(page, ZOOM_IN)).toEqual([316, 511, 44, 44]);
+});
+
+test('the credit fades over 150ms', async ({ page }) => {
+  await openMap(page);
+  await expect(credit(page)).toHaveCSS('transition-duration', '0.15s');
+  await expect(credit(page)).toHaveCSS('transition-property', 'opacity');
+});
+
+test('strip closed again: the credit comes back in the same place', async ({ page }) => {
+  await openMap(page);
+  await expect(credit(page)).toHaveCSS('opacity', '1');
+  const before = await boxOf(page, '.leaflet-control-attribution');
+  await tapPin(page, 'Table Bay Bookshop');
+  await expect(credit(page)).toHaveCSS('opacity', '0');
+  await page.touchscreen.tap(60, 330);
+  await expect(strip(page)).toHaveCount(0);
+  await expect(credit(page)).toHaveCSS('opacity', '1');
+  await expect(credit(page)).toHaveCSS('pointer-events', 'auto');
+  expect(await boxOf(page, '.leaflet-control-attribution')).toEqual(before);
+});
+
+test.describe('on desktop', () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test('strip open: the credit stays visible and lifted above the List button, as before', async ({ page }) => {
+    await openMap(page);
+    await expect.poll(() => boxOf(page, '.leaflet-control-attribution')).toEqual([16, 764, 179, 20]);
+    await tapPin(page, 'Table Bay Bookshop');
+    await expect(credit(page)).toHaveCSS('opacity', '1');
+    await expect.poll(() => boxOf(page, '.leaflet-control-attribution')).toEqual([16, 512, 179, 20]);
+  });
+});
+
+test.describe('the About page', () => {
+  test('a Map data card carries the credit and the licence link, after Our Story', async ({ page }) => {
+    await page.goto('/about');
+    const heading = page.getByText('Map data', { exact: true });
+    await expect(heading).toBeVisible();
+    const card = heading.locator('xpath=ancestor::*[contains(@class,"material-card")][1]');
+    await expect(card).toHaveText(/Maps use data from OpenStreetMap, © OpenStreetMap contributors, available under the Open Database License\./);
+    const link = card.getByRole('link', { name: 'OpenStreetMap contributors' });
+    await expect(link).toHaveAttribute('href', 'https://www.openstreetmap.org/copyright');
+    await expect(link).toHaveAttribute('target', '_blank');
+    await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    const story = (await page.getByText('Our Story', { exact: true }).boundingBox())!;
+    expect((await heading.boundingBox())!.y).toBeGreaterThan(story.y);
+    const connect = (await page.getByRole('heading', { name: 'Connect With Us' }).boundingBox())!;
+    expect((await heading.boundingBox())!.y).toBeLessThan(connect.y);
+    // The same primary colour as the rest of the app's links
+    const primary = await page.evaluate(() => {
+      const probe = document.createElement('span');
+      probe.className = 'text-primary';
+      document.body.append(probe);
+      const colour = getComputedStyle(probe).color;
+      probe.remove();
+      return colour;
+    });
+    await expect(link).toHaveCSS('color', primary);
+  });
 });
 
 test('search autocomplete still opens the drawer directly', async ({ page }) => {
