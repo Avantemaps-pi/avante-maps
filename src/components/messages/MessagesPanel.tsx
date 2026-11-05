@@ -187,6 +187,8 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
   const isBusinessInbox = inbox?.kind === 'business';
 
   const activeConv = conversations.find((c) => c.id === activeConvId);
+  const selectedBusinessName =
+    ownedBusinesses.find((b) => `b:${b.id}` === inboxKey)?.business_name ?? 'this business';
 
   if (!uid) {
     return (
@@ -232,13 +234,13 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
                 className="my-auto"
                 kind="empty"
                 icon={MessageSquare}
-                title="No conversations yet"
+                title="No messages yet"
                 body={
                   isBusinessInbox
-                    ? 'No customer messages yet for this business.'
-                    : 'Open a business listing and tap Message to start one.'
+                    ? `When a customer messages ${selectedBusinessName}, it shows here.`
+                    : 'Message a business from its page or the map, and your chats will show here.'
                 }
-                {...(!isBusinessInbox ? { action: { label: 'Browse businesses', onClick: () => navigate('/') } } : {})}
+                {...(!isBusinessInbox ? { action: { label: 'Find a business', onClick: () => navigate('/') } } : {})}
               />
             ) : (
               <ul className="divide-y divide-border">
