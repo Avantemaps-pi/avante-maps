@@ -81,6 +81,10 @@ async function setup(page: Page, opts: { businesses?: object[]; replies?: object
     },
     [SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser, opts.signedOut ? null : fakeSession, STORAGE_MESSAGES, opts.history ?? null],
   );
+  // These tests start on Bot: as if it was the tab picked earlier in the session
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('communicon-tab')) sessionStorage.setItem('communicon-tab', 'ai');
+  });
   await page.goto('/communicon');
   await expect(page.getByRole('tab', { name: 'Bot' })).toBeVisible();
   return { verifyCalls };

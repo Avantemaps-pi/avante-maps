@@ -103,6 +103,10 @@ async function mockBackend(page: Page, opts: Setup = {}) {
 
 async function openVerification(page: Page, opts: Setup = {}) {
   const calls = await mockBackend(page, opts);
+  // These tests start on Bot: as if it was the tab picked earlier in the session
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('communicon-tab')) sessionStorage.setItem('communicon-tab', 'ai');
+  });
   await page.goto('/communicon');
   // One business: no question, the check starts straight away
   await page.getByRole('button', { name: 'Check verification status' }).tap();

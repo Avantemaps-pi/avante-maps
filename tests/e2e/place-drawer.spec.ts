@@ -13,7 +13,7 @@
  * helpers/mapMocks.ts.
  */
 import { test, expect, type Page } from '@playwright/test';
-import { mockMap } from './helpers/mapMocks';
+import { mockMap, mockUser } from './helpers/mapMocks';
 
 const photo = (n: number) =>
   'data:image/svg+xml;utf8,' +
@@ -157,6 +157,41 @@ test('Read more only when the description overflows, and it toggles', async ({ p
   await expect(more).toBeVisible();
   await more.tap();
   await expect(drawer(page).getByRole('button', { name: 'Show less' })).toBeVisible();
+});
+
+test('the Message button opens that conversation, on Messages, even if Bot was the tab remembered', async ({ page }) => {
+  const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  const user = { id: mockUser.uid, aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() };
+  const session = {
+    access_token: `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: mockUser.uid, exp, role: 'authenticated', aud: 'authenticated' })}.sig`,
+    refresh_token: 'fake-refresh',
+    expires_in: 3600,
+    expires_at: exp,
+    token_type: 'bearer',
+    user,
+  };
+  const CONVERSATION = '11111111-1111-4111-8111-111111111111';
+  await page.route('**/auth/v1/**', (route) => route.fulfill({ json: user }));
+  await page.route('**/rest/v1/conversations*', (route) =>
+    route.fulfill({
+      json: [{ id: CONVERSATION, business_id: FULL.id, customer_id: mockUser.uid, last_message_at: '2026-11-04T09:00:00Z', last_message_preview: 'Hello there', customer_unread: 0, business_unread: 0 }],
+    }),
+  );
+  await page.route('**/rest/v1/messages*', (route) =>
+    route.fulfill({ json: [{ id: 'm1', conversation_id: CONVERSATION, sender_id: mockUser.uid, sender_role: 'customer', body: 'Hello there', read_at: null, created_at: '2026-11-04T09:00:00Z' }] }),
+  );
+  await page.addInitScript((s) => {
+    localStorage.setItem('supabase.auth.token', JSON.stringify(s));
+    sessionStorage.setItem('communicon-tab', 'ai');
+  }, session);
+  await openDrawer(page, FULL);
+  await drawer(page).getByRole('button', { name: 'Message' }).tap();
+  await page.waitForURL('**/communicon');
+  await expect(page.getByRole('tab', { name: 'Messages' })).toHaveAttribute('aria-selected', 'true');
+  // The thread itself, not the inbox list
+  await expect(page.getByRole('button', { name: 'Back to conversations' })).toBeVisible();
+  await expect(page.getByText('Hello there')).toBeVisible();
 });
 
 test('short description: no Read more', async ({ page }) => {
