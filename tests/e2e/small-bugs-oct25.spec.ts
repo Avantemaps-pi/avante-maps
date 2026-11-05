@@ -66,6 +66,7 @@ async function setup(page: Page, opts: Setup = {}) {
   await page.route('**/rest/v1/rpc/get_public_business_info*', (route) =>
     route.fulfill({ json: [BAKERY, GADGETS] }),
   );
+  await page.route('**/rest/v1/business_review_stats*', (route) => route.fulfill({ json: [] }));
   for (const url of ['https://ipwho.is/**', 'https://ipapi.co/json/', 'https://get.geojs.io/v1/ip/geo.json']) {
     await page.route(url, (route) =>
       route.fulfill({ json: { success: true, latitude: 48.8566, longitude: 2.3522 } }),

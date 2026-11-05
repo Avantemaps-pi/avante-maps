@@ -12,6 +12,7 @@
  * as in reauth-false-success.spec.ts.
  */
 import { test, expect, type Page } from './helpers/fixtures';
+import { NEARBY_BUSINESSES, mockBusinessList } from './helpers/mapMocks';
 
 const SANDBOX_MOCK_KEY = 'avante_sandbox_mock_session';
 const STORAGE_KEY = 'avante_maps_auth';
@@ -45,6 +46,7 @@ const ipRequests = new WeakMap<Page, number>();
 
 async function setup(page: Page, mock: GeoMock) {
   await page.route('**/pi-sdk.js', (route) => route.abort());
+  await mockBusinessList(page, NEARBY_BUSINESSES);
   ipRequests.set(page, 0);
   // Every IP provider (sign-in focus and the locate fallback) returns IP
   for (const url of ['https://ipapi.co/json/', 'https://get.geojs.io/v1/ip/geo.json', 'https://ipwho.is/**']) {

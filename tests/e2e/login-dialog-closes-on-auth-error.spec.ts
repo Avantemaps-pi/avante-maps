@@ -15,6 +15,7 @@
  * isLoading flips true, which masks the bug.
  */
 import { test, expect } from './helpers/fixtures';
+import { NEARBY_BUSINESSES, mockBusinessList } from './helpers/mapMocks';
 
 // The real 60s PI_AUTH_TIMEOUT_MS watchdog starts only after the permission
 // and SDK-ready checks, so allow headroom past 60s (matches
@@ -29,6 +30,7 @@ test('LoginDialog on /registration closes when the 60s auth timeout sets authErr
   );
   // Block the real SDK so the stub below survives.
   await page.route('**/pi-sdk.js', (route) => route.abort());
+  await mockBusinessList(page, NEARBY_BUSINESSES);
   await page.addInitScript(() => {
     (window as unknown as { Pi: object }).Pi = {
       init: () => undefined,

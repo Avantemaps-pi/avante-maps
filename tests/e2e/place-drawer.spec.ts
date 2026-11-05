@@ -178,6 +178,14 @@ test('the Message button opens that conversation, on Messages, even if Bot was t
       json: [{ id: CONVERSATION, business_id: FULL.id, customer_id: mockUser.uid, last_message_at: '2026-11-04T09:00:00Z', last_message_preview: 'Hello there', customer_unread: 0, business_unread: 0 }],
     }),
   );
+  // The drawer's owner check and bookmarks, the user row, and the business's name for the inbox
+  await page.route('**/rest/v1/businesses*', (route) =>
+    route.request().method() === 'HEAD' ? route.fulfill({ status: 200, headers: { 'content-range': '*/0' } }) : route.fulfill({ json: [] }),
+  );
+  await page.route('**/rest/v1/bookmarks*', (route) => route.fulfill({ json: [] }));
+  await page.route('**/rest/v1/users*', (route) => route.fulfill({ json: [] }));
+  await page.route('**/rest/v1/user_roles*', (route) => route.fulfill({ json: [] }));
+  await page.route('**/rest/v1/rpc/get_public_business_detail*', (route) => route.fulfill({ json: [{ id: FULL.id, name: FULL.name, images: [] }] }));
   await page.route('**/rest/v1/messages*', (route) =>
     route.fulfill({ json: [{ id: 'm1', conversation_id: CONVERSATION, sender_id: mockUser.uid, sender_role: 'customer', body: 'Hello there', read_at: null, created_at: '2026-11-04T09:00:00Z' }] }),
   );

@@ -11,6 +11,7 @@
  * localhost only) is used, as in reauth-false-success.spec.ts.
  */
 import { test, expect, type Page, type Locator } from './helpers/fixtures';
+import { NEARBY_BUSINESSES, mockBusinessList } from './helpers/mapMocks';
 
 const SANDBOX_MOCK_KEY = 'avante_sandbox_mock_session';
 const STORAGE_KEY = 'avante_maps_auth';
@@ -34,6 +35,7 @@ test.use({ viewport: PHONE });
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/pi-sdk.js', (route) => route.abort());
+  await mockBusinessList(page, NEARBY_BUSINESSES);
   await page.route('https://ipwho.is/**', (route) =>
     route.fulfill({ json: { success: true, latitude: 48.8566, longitude: 2.3522 } }),
   );

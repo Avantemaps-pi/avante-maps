@@ -30,6 +30,9 @@ test('failed re-auth on Message tap shows honest failure, not false success', as
   // Mocked businesses and the sandbox session; the real Pi SDK is blocked so
   // it can't overwrite the stub below.
   await mockMap(page, NEARBY_BUSINESSES);
+  // The failed re-auth is recorded: answer it here, so runs never write to the production table
+  await page.route('**/functions/v1/telemetry-beacon**', (route) => route.fulfill({ json: { success: true } }));
+  await page.route('**/rest/v1/reauth_telemetry**', (route) => route.fulfill({ status: 201, body: '' }));
 
   await page.addInitScript(() => {
     // Stub Pi SDK: present (so the login flow proceeds) but authentication
