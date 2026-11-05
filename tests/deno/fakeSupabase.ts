@@ -72,6 +72,8 @@ export function installFakeSupabase(options: {
   users: Record<string, string>;
   external?: (url: URL, init: RequestInit | undefined) => Promise<Response | undefined> | Response | undefined;
   rpc?: (name: string, args: Row) => Response;
+  /** Tables whose inserts fail */
+  failInserts?: string[];
 }): FakeSupabase {
   const fake: FakeSupabase = { tables: options.tables, calls: [], restore: () => (activeFetch = null) };
 
@@ -120,6 +122,10 @@ export function installFakeSupabase(options: {
       const hit = rows.filter((r) => matches(r, url.searchParams));
       hit.forEach((r) => Object.assign(r, body));
       return prefer.includes('return=representation') ? respond(hit) : new Response(null, { status: 204 });
+    }
+
+    if (method === 'POST' && options.failInserts?.includes(table)) {
+      return Response.json({ code: '42501', message: 'insert refused' }, { status: 403 });
     }
 
     if (method === 'POST') {

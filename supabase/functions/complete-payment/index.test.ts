@@ -29,8 +29,9 @@ const approvedRow = (extra: Row = {}): Row => ({
   ...extra,
 });
 
-function setup(options: { rows?: Row[]; piAmount?: number; priceUsd?: number; rpcError?: string } = {}) {
+function setup(options: { rows?: Row[]; piAmount?: number; priceUsd?: number; rpcError?: string; piAlreadyCompleted?: boolean } = {}) {
   const rpcCalls: Row[] = [];
+  const credits: Row[] = [];
   const fake = installFakeSupabase({
     tables: {
       pi_price: [{ id: 1, price_usd: options.priceUsd ?? 0.0767 }],
@@ -40,15 +41,22 @@ function setup(options: { rows?: Row[]; piAmount?: number; priceUsd?: number; rp
     users: { 'owner-token': OWNER },
     external: (url) => {
       if (url.host !== 'api.minepi.com') return undefined;
+      if (url.pathname.endsWith('/complete') && options.piAlreadyCompleted) {
+        return Response.json({ error: 'already_completed', message: 'This payment was already completed' }, { status: 400 });
+      }
       return Response.json({ identifier: PAYMENT_ID, amount: options.piAmount ?? 65.19 });
     },
     rpc: (name, args) => {
+      if (name === 'credit_wallet_balance') {
+        credits.push(args);
+        return Response.json(args['p_amount_pi']);
+      }
       assertEquals(name, 'handle_subscription_after_payment');
       rpcCalls.push(args);
       return options.rpcError ? Response.json({ code: 'P0001', message: options.rpcError }, { status: 400 }) : Response.json(null);
     },
   });
-  return { fake, rpcCalls, row: () => fake.tables['payments']![0], notifications: () => fake.tables['notifications']! };
+  return { fake, rpcCalls, credits, row: () => fake.tables['payments']![0], notifications: () => fake.tables['notifications']! };
 }
 
 const call = async (metadata: Record<string, unknown> = PLAN) => {
@@ -162,5 +170,181 @@ test('a top-up: unchanged, credited with no plan', async () => {
   });
   const { status, json } = await call({ kind: 'wallet_topup' });
   assertEquals([status, json.success, json.newBalance], [200, true, 3]);
+  fake.restore();
+});
+
+// ---- "Already completed" must not mean success without the plan
+
+const COMPLETED = { approved: true, verified: true, completed: true, cancelled: false };
+const MISMATCH_MESSAGE = "Payment received, but it doesn't match the price. Please contact support.";
+
+test('a fresh payment writes plan_activated', async () => {
+  const { fake, row } = setup();
+  assertEquals((await call()).status, 200);
+  assertEquals(row()!['status'], { ...COMPLETED, plan_activated: true });
+  fake.restore();
+});
+
+test('Pi says already completed, approved plan row: amount checked, plan granted once, recorded', async () => {
+  const { fake, rpcCalls, row, notifications } = setup({ piAlreadyCompleted: true });
+  const { status, json } = await call();
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(rpcCalls.length, 1);
+  assertEquals(rpcCalls[0]!['p_subscription_tier'], 'small-business');
+  assertEquals(row()!['status'], { ...COMPLETED, plan_activated: true });
+  assertEquals(row()!['txid'], TXID);
+  assertEquals(notifications().length, 1);
+  // A retry doesn't grant again
+  assertEquals((await call()).status, 200);
+  assertEquals(rpcCalls.length, 1);
+  fake.restore();
+});
+
+test('Pi says already completed, and the amount is below what was approved: refused and marked', async () => {
+  const { fake, rpcCalls, row } = setup({ piAlreadyCompleted: true, piAmount: 5 });
+  const { status, json } = await call();
+  assertEquals([status, json.error_code], [400, 'amount_mismatch_after_completion']);
+  assertEquals(rpcCalls.length, 0);
+  assertEquals((row()!['status'] as Row)['error'], 'amount_mismatch_after_completion');
+  fake.restore();
+});
+
+test('Pi says already completed, plan_activated already true: no second grant, success, flag kept', async () => {
+  const { fake, rpcCalls, row, notifications } = setup({
+    piAlreadyCompleted: true,
+    rows: [approvedRow({ status: { ...APPROVED, plan_activated: true } })],
+  });
+  const { status, json } = await call();
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(rpcCalls.length, 0);
+  assertEquals(notifications().length, 0);
+  assertEquals((row()!['status'] as Row)['plan_activated'], true);
+  fake.restore();
+});
+
+test('Pi says already completed, old row with no approved_amount_pi: no grant, success as today', async () => {
+  const { fake, rpcCalls, notifications } = setup({
+    piAlreadyCompleted: true,
+    rows: [approvedRow({ approved_amount_pi: null })],
+  });
+  const { status, json } = await call();
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(rpcCalls.length, 0);
+  assertEquals(notifications().length, 0);
+  fake.restore();
+});
+
+test('Pi says already completed, top up: credited (idempotent there), success', async () => {
+  const topUp = { kind: 'wallet_topup' };
+  const { fake, credits, row } = setup({
+    piAlreadyCompleted: true,
+    piAmount: 3,
+    rows: [approvedRow({ metadata: topUp, approved_amount_pi: null })],
+  });
+  const { status, json } = await call(topUp);
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(credits.length, 1);
+  assertEquals(credits[0]!['p_amount_pi'], 3);
+  assertEquals(credits[0]!['p_payment_id'], PAYMENT_ID);
+  assertEquals((row()!['status'] as Row)['completed'], true);
+  fake.restore();
+});
+
+test('Pi says already completed with no row at all: nothing credited for a stranger\'s payment', async () => {
+  const { fake, credits, rpcCalls } = setup({ piAlreadyCompleted: true, rows: [] });
+  const { status } = await call({ kind: 'wallet_topup' });
+  assertEquals(status, 200);
+  assertEquals(credits.length, 0);
+  assertEquals(rpcCalls.length, 0);
+  fake.restore();
+});
+
+test('Pi says already completed: a row of another kind cannot be claimed as a top up', async () => {
+  const { fake, credits } = setup({ piAlreadyCompleted: true, rows: [approvedRow({ approved_amount_pi: null })] });
+  assertEquals((await call({ kind: 'wallet_topup' })).status, 200);
+  assertEquals(credits.length, 0);
+  fake.restore();
+});
+
+for (const piAlreadyCompleted of [false, true]) {
+  test(`an approved plan can't be completed as a top up as well (Pi already completed: ${piAlreadyCompleted})`, async () => {
+    const { fake, credits, rpcCalls } = setup({ piAlreadyCompleted });
+    assertEquals((await call({ kind: 'wallet_topup' })).status, 400);
+    assertEquals(credits.length, 0);
+    // A retry grants the plan that was paid for, and nothing is credited
+    assertEquals((await call()).status, 200);
+    assertEquals(rpcCalls.length, 1);
+    assertEquals(rpcCalls[0]!['p_subscription_tier'], 'small-business');
+    assertEquals(credits.length, 0);
+    fake.restore();
+  });
+}
+
+test('the amount check failing after completion: 400, marked, and a retry gets the same failure', async () => {
+  const { fake, rpcCalls, row, notifications } = setup({ piAmount: 10 });
+  const first = await call();
+  assertEquals([first.status, first.json.success, first.json.error_code, first.json.message], [400, false, 'amount_mismatch_after_completion', MISMATCH_MESSAGE]);
+  assertEquals(row()!['status'], { ...COMPLETED, error: 'amount_mismatch_after_completion' });
+  const retry = await call();
+  assertEquals([retry.status, retry.json.success, retry.json.error_code, retry.json.message], [400, false, 'amount_mismatch_after_completion', MISMATCH_MESSAGE]);
+  assertEquals(rpcCalls.length, 0);
+  assertEquals(notifications().length, 0);
+  fake.restore();
+});
+
+test('the same for an older row, checked against the price', async () => {
+  const { fake, row } = setup({ rows: [approvedRow({ approved_amount_pi: null })], piAmount: 5 });
+  assertEquals((await call()).json.error_code, 'amount_mismatch_after_completion');
+  assertEquals((row()!['status'] as Row)['error'], 'amount_mismatch_after_completion');
+  assertEquals((await call()).json.error_code, 'amount_mismatch_after_completion');
+  fake.restore();
+});
+
+test('the same for a message fee', async () => {
+  const fee = { kind: 'message_fee', feePi: 0.5 };
+  const { fake, row } = setup({ rows: [approvedRow({ metadata: fee, approved_amount_pi: null })], piAmount: 0.1 });
+  assertEquals((await call(fee)).json.error_code, 'amount_mismatch_after_completion');
+  assertEquals((row()!['status'] as Row)['error'], 'amount_mismatch_after_completion');
+  assertEquals((await call(fee)).json.error_code, 'amount_mismatch_after_completion');
+  fake.restore();
+});
+
+test('a completed plan row with no plan_activated and no error: granted once, from the row', async () => {
+  const annual = { subscriptionTier: 'small-business', frequency: 'annual' };
+  const { fake, rpcCalls, row, notifications } = setup({
+    rows: [approvedRow({ metadata: annual, approved_amount_pi: 625.82, status: COMPLETED, txid: TXID })],
+  });
+  // Whatever the request claims, the row says what was paid for
+  const { status, json } = await call({ subscriptionTier: 'organization', frequency: 'annual' });
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(rpcCalls.length, 1);
+  assertEquals(rpcCalls[0]!['p_subscription_tier'], 'small-business');
+  assertEquals(rpcCalls[0]!['p_frequency'], 'annual');
+  assertEquals(row()!['status'], { ...COMPLETED, plan_activated: true });
+  assertEquals(notifications().length, 1);
+  assert(String(notifications()[0]!['content']).includes('625.82'));
+  assertEquals((await call()).status, 200);
+  assertEquals(rpcCalls.length, 1);
+  assertEquals(notifications().length, 1);
+  fake.restore();
+});
+
+test('the same, if the grant fails: plan_not_activated, and a retry gets it too', async () => {
+  const { fake, rpcCalls, row } = setup({ rpcError: 'boom', rows: [approvedRow({ status: COMPLETED, txid: TXID })] });
+  assertEquals((await call()).json.error_code, 'plan_not_activated');
+  assertEquals((row()!['status'] as Row)['error'], 'plan_not_activated');
+  assertEquals((await call()).json.error_code, 'plan_not_activated');
+  assertEquals(rpcCalls.length, 1);
+  fake.restore();
+});
+
+test('an old completed row (like 25 March) never gets a plan again', async () => {
+  const { fake, rpcCalls, notifications } = setup({
+    rows: [approvedRow({ approved_amount_pi: null, status: COMPLETED, txid: TXID })],
+  });
+  const { status, json } = await call();
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(rpcCalls.length, 0);
+  assertEquals(notifications().length, 0);
   fake.restore();
 });

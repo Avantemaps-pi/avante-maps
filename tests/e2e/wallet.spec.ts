@@ -456,6 +456,25 @@ test('plan_not_activated reads "Paid · plan not activated", with the Contact su
   await page.waitForURL('**/contact');
 });
 
+test('amount_mismatch_after_completion does not read Completed, and has the Contact support line', async ({ page }) => {
+  await setup(page, {
+    payments: [payment(4, '2026-11-02T09:00:00Z', 5, { subscriptionTier: 'small-business' }, { ...COMPLETED, error: 'amount_mismatch_after_completion' })],
+  });
+  await page.goto('/wallet');
+  const row = activityRows(page).first();
+  await expect(row).toContainText("Plan · 2 Nov · Paid · didn't match the price");
+  await expect(row).not.toContainText('Completed');
+  await expect(row.getByRole('link', { name: 'Contact support' })).toBeVisible();
+  await expect(row).toContainText('− 5.00 π');
+});
+
+test('a plan with plan_activated reads Completed', async ({ page }) => {
+  await setup(page, { payments: [payment(2, '2026-11-02T09:00:00Z', 65.19, { subscriptionTier: 'small-business' }, { ...COMPLETED, plan_activated: true }, { approved_amount_pi: 65.19 })] });
+  await page.goto('/wallet');
+  await expect(activityRows(page).first()).toContainText('Plan · 2 Nov · Completed');
+  await expect(activityRows(page).first().getByRole('link', { name: 'Contact support' })).toHaveCount(0);
+});
+
 test('empty: "No activity yet" in a bordered card, not dashed, and no footnote', async ({ page }) => {
   await setup(page, { ledger: [TOP_UP_CREDIT] }); // A credit alone isn't activity
   await page.goto('/wallet');
