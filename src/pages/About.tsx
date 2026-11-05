@@ -98,6 +98,26 @@ const About = () => {
           </CardContent>
         </Card>
 
+        <Card className="material-card">
+          <CardHeader>
+            <CardTitle className="text-xl font-semibold">Map data</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p>
+              Maps use data from OpenStreetMap, ©{' '}
+              <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                OpenStreetMap contributors
+              </a>
+              , available under the Open Database License.
+            </p>
+          </CardContent>
+        </Card>
+
         <div className="flex flex-col items-center justify-center space-y-4 py-8">
           <h2 className="text-2xl font-semibold">Connect With Us</h2>
           <div className="flex items-center gap-2">

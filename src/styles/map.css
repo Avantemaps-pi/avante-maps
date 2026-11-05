@@ -84,10 +84,22 @@
   pointer-events: none;
 }
 
-/* Card strip open: sit above the List button, which sits above the strip
+/* Card strip open on mobile: the strip covers its spot and the 12px gap below the strip is too small
+   for it, so it fades and keeps its position. OSMF's attribution guidelines allow fading on map
+   interaction, and the About page keeps the credit findable */
+@media (max-width: 767px) {
+  .strip-open .leaflet-container .leaflet-bottom .leaflet-control-attribution {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* Card strip open on desktop: sit above the List button, which sits above the strip
    (strip top 200px + 12px gap + 44px button + 12px gap) */
-.strip-open .leaflet-container .leaflet-bottom .leaflet-control-attribution {
-  margin-bottom: calc(268px + env(safe-area-inset-bottom));
+@media (min-width: 768px) {
+  .strip-open .leaflet-container .leaflet-bottom .leaflet-control-attribution {
+    margin-bottom: calc(268px + env(safe-area-inset-bottom));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

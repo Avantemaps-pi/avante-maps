@@ -180,11 +180,11 @@ for (const size of SIZES) {
 
         await openStripOn(page, SIX[1]!.name);
         const opened = await controlBoxes(page);
-        expect(Object.keys(opened).sort()).toEqual(['list', 'locate', 'osm', 'strip', 'zoomIn', 'zoomOut']);
+        // The OSM credit has faded where it was, as the strip covers its spot
+        expect(Object.keys(opened).sort()).toEqual(['list', 'locate', 'strip', 'zoomIn', 'zoomOut']);
         expectNoOverlap(opened);
-        // 12px above the strip, the OSM credit above it
+        // 12px above the strip
         expect(Math.round(opened.strip!.top - opened.list!.bottom)).toBe(12);
-        expect(opened.osm!.bottom).toBeLessThanOrEqual(opened.list!.top);
         await page.unrouteAll({ behavior: 'ignoreErrors' });
       }
     });
