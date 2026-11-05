@@ -74,7 +74,7 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
   initialConversationId,
   initialInboxBusinessId,
 }) => {
-  const { user } = useAuth();
+  const { user, login } = useAuth();
   const uid = user?.uid;
   const navigate = useNavigate();
   const location = useLocation();
@@ -192,8 +192,11 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
 
   if (!uid) {
     return (
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
         <p className="text-sm text-muted-foreground">Sign in to use messages.</p>
+        <Button type="button" className="h-11" onClick={() => void login()}>
+          Sign in
+        </Button>
       </div>
     );
   }
