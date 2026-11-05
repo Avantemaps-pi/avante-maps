@@ -9,8 +9,8 @@ interface ChatModeToggleProps {
 }
 
 const MODES: Array<{ value: ChatMode; label: string; icon: React.ElementType }> = [
-  { value: 'ai', label: 'Bot', icon: Bot },
   { value: 'live', label: 'Messages', icon: MessageSquare },
+  { value: 'ai', label: 'Bot', icon: Bot },
 ];
 
 // Slim full-width row: a segmented control with two equal 44px tabs

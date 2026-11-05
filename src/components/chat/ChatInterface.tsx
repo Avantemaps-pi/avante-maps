@@ -224,7 +224,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   return (
     <Card className="flex flex-1 min-h-0 flex-col overflow-hidden border-none rounded-none shadow-none sm:rounded-lg sm:shadow-md">
       <div className="flex flex-1 min-h-0 flex-col">
-        {/* Bot/Messages switch; the page header is the only title */}
+        {/* Messages/Bot switch; the page header is the only title */}
         <ChatModeToggle
           chatMode={chatMode}
           onChatModeChange={onChatModeChange}
