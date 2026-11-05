@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
+import { createPaymentNotification } from '../_shared/notifications.ts';
 import { getExpectedPlanPi, roundUpPi } from '../_shared/prices.ts';
 import {
   getOrCreateLifecycleId,
@@ -85,6 +86,19 @@ Deno.serve(async (req) => {
     // Rounded up to 0.01, the amount the Pricing page shows
     const amountPi = roundUpPi(expected.expectedPi);
 
+    // pay_plan_from_balance returns the same for a repeat as for a new payment, so look first: only
+    // a new payment gets a notification. If this can't be read, the payment still goes ahead
+    const { data: alreadyPaid, error: lookupError } = await supabaseClient
+      .from('wallet_ledger')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('reference_id', `plan:${tier}:${frequency}:${requestId}`)
+      .limit(1)
+      .maybeSingle();
+    if (lookupError) {
+      log.warn(`${FN}.lookup.error`, { stage: 'lookup', code: lookupError.code, message: lookupError.message });
+    }
+
     const { data: balance, error: payError } = await supabaseClient.rpc('pay_plan_from_balance', {
       p_user_id: userId,
       p_tier: tier,
@@ -107,6 +121,23 @@ Deno.serve(async (req) => {
       }
       log.error(`${FN}.pay.failed`, { stage: 'db_write', code: payError.code, message: payError.message });
       return respond({ success: false, message: 'Payment failed. Your balance has not changed.' }, 500);
+    }
+
+    if (!alreadyPaid && !lookupError) {
+      // Reports a failure by returning it, and could throw on something unexpected
+      try {
+        const notified = await createPaymentNotification(supabaseClient, userId, amountPi, tier);
+        if (notified.success) {
+          log.info(`${FN}.notify.created`, { stage: 'notify' });
+        } else {
+          log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+        }
+      } catch (notifError) {
+        log.warn(`${FN}.notify.error`, {
+          stage: 'notify',
+          message: notifError instanceof Error ? notifError.message : String(notifError),
+        });
+      }
     }
 
     log.info(`${FN}.done`, { stage: 'done', tier, frequency, amountPi, balance });
