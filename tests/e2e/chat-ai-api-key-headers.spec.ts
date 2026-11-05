@@ -29,6 +29,8 @@ test('chat-ai request sends the publishable key as apikey, never as Bearer', asy
     });
   });
 
+  // Bot, as if it was the tab picked earlier in the session
+  await page.addInitScript(() => sessionStorage.setItem('communicon-tab', 'ai'));
   await page.goto('/communicon');
 
   const input = page.getByPlaceholder('Ask about your business...');

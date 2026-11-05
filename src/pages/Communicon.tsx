@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
 import AppLayout from '@/components/layout/AppLayout';
 
-import ChatInterface from '@/components/chat/ChatInterface';
+import ChatInterface, { type ChatMode } from '@/components/chat/ChatInterface';
 import { useChatState } from '@/hooks/useChatState';
 import { useNavigate, useLocation } from '@/lib/router-compat';
 import { toast } from 'sonner';
@@ -36,12 +36,33 @@ const readConfirmLink = (search: string) => {
   return { present, link: valid ? { code, businessId } : null };
 };
 
+// The last tab the user picked in this visit (session)
+const TAB_STORAGE_KEY = 'communicon-tab';
+
+const readRememberedTab = (): ChatMode | null => {
+  try {
+    const tab = sessionStorage.getItem(TAB_STORAGE_KEY);
+    return tab === 'ai' || tab === 'live' ? tab : null;
+  } catch {
+    return null;
+  }
+};
+
+const rememberTab = (tab: ChatMode) => {
+  try {
+    sessionStorage.setItem(TAB_STORAGE_KEY, tab);
+  } catch {
+    // storage unavailable: a later visit opens on Messages
+  }
+};
+
 const Communicon = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, isLoading: authLoading } = useAuth();
-  // Always start in 'ai' so the first client render matches the server, which has no
-  // history state. An incoming chatMode: 'live' is applied after mount by the effect below.
+  // The tab isn't known until after mount: it depends on history state and sessionStorage, which
+  // the server doesn't have. Nothing shows until then, so the first client render matches the
+  // server's. The tab is chosen by the effect below, and an incoming chatMode by the one after it.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -51,6 +72,7 @@ const Communicon = () => {
     messages,
     setMessages,
     chatMode,
+    setChatMode,
     handleChatModeChange,
     handleSendMessage,
     sendVerificationRequest,
@@ -83,6 +105,22 @@ const Communicon = () => {
     };
   }, [sendVerificationRequest, handleBusinessSelection]);
 
+  // Which tab opens. An incoming chatMode is handled by its own effect further down. These need
+  // the Bot tab for their card or code box; anything else opens on the last tab picked, or Messages
+  useEffect(() => {
+    const state = location.state as any;
+    if (state?.chatMode) return;
+    const needsBot =
+      !!state?.triggerVerification || readConfirmLink(location.search).present || !!loadPendingContactCode();
+    handleChatModeChange(needsBot ? 'ai' : (readRememberedTab() ?? 'live'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleTabPicked = (tab: ChatMode) => {
+    rememberTab(tab);
+    handleChatModeChange(tab);
+  };
+
   const [codeDialog, setCodeDialog] = useState<CodeDialogState | null>(null);
   // The confirm link's code, kept until the user is signed in
   const [linkConfirm, setLinkConfirm] = useState<{ code: string; businessId: number } | null>(null);
@@ -100,7 +138,9 @@ const Communicon = () => {
     }
     const open = () => {
       const pending = loadPendingContactCode();
-      if (pending) setCodeDialog(pending);
+      if (!pending) return;
+      setChatMode('ai'); // Not handleChatModeChange: this listener keeps the first render's copy
+      setCodeDialog(pending);
     };
     window.addEventListener(OPEN_PENDING_CONTACT_CODE_EVENT, open);
     return () => window.removeEventListener(OPEN_PENDING_CONTACT_CODE_EVENT, open);
@@ -160,6 +200,7 @@ const Communicon = () => {
       hasTriggeredVerification.current = true;
       const verificationType = state.verificationType || 'verification';
       navigate(location.pathname, { replace: true, state: {} });
+      setChatMode('ai');
       triggerVerificationFlow(verificationType);
     }
   }, [location.state, triggerVerificationFlow, navigate, location.pathname]); // eslint-disable-line
@@ -313,7 +354,7 @@ const Communicon = () => {
         ) : (
           <ChatInterface
             chatMode={chatMode}
-            onChatModeChange={handleChatModeChange}
+            onChatModeChange={handleTabPicked}
             messages={messages}
             message={message}
             setMessage={setMessage}
