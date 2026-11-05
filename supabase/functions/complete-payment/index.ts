@@ -17,6 +17,12 @@ const PLAN_NOT_ACTIVATED = {
   message: 'Payment received, but your plan could not be activated. Please contact support.',
 };
 
+const AMOUNT_MISMATCH_AFTER_COMPLETION = {
+  success: false,
+  error_code: 'amount_mismatch_after_completion',
+  message: "Payment received, but it doesn't match the price. Please contact support.",
+};
+
 const PaymentRequestSchema = z.object({
   paymentId: z.string()
     .min(1, 'Payment ID is required')
@@ -65,6 +71,66 @@ Deno.serve(async (req) => {
       },
       status,
     });
+
+  // Grants the plan and records it on the row. Returns the failure to send, or null when granted
+  const activatePlan = async (
+    paymentId: string,
+    txid: string,
+    userId: string,
+    tier: string,
+    frequency: 'monthly' | 'annual',
+  ): Promise<Response | null> => {
+    let planError: string | null = null;
+    try {
+      const { error: subscriptionError } = await supabaseClient.rpc('handle_subscription_after_payment', {
+        p_user_id: userId,
+        p_username: null,
+        p_email: null,
+        p_subscription_tier: tier,
+        p_frequency: frequency,
+      });
+      if (subscriptionError) planError = subscriptionError.message;
+    } catch (subscriptionErr) {
+      planError = subscriptionErr instanceof Error ? subscriptionErr.message : String(subscriptionErr);
+    }
+
+    const baseStatus = { approved: true, verified: true, completed: true, cancelled: false };
+
+    if (planError !== null) {
+      log.error(`${FN}.subscription.not_activated`, { stage: 'db_write', tier, message: planError });
+      // Marked on the row so a retry doesn't report success, and so support can find it
+      await supabaseClient.from('payments').update({
+        status: { ...baseStatus, error: 'plan_not_activated' },
+        updated_at: new Date().toISOString(),
+      }).eq('payment_id', paymentId);
+      return respond({ ...PLAN_NOT_ACTIVATED, paymentId, txid }, 500);
+    }
+
+    log.info(`${FN}.subscription.created`, { stage: 'db_write', tier });
+    const { error: markError } = await supabaseClient.from('payments').update({
+      status: { ...baseStatus, plan_activated: true },
+      updated_at: new Date().toISOString(),
+    }).eq('payment_id', paymentId);
+    if (markError) {
+      log.error(`${FN}.subscription.mark_failed`, { stage: 'db_write', message: markError.message });
+    }
+    return null;
+  };
+
+  // The Pi has moved, but it wasn't the price. Marked so a retry gets this answer rather than success
+  const refuseAmountAfterCompletion = async (paymentId: string, txid: string) => {
+    await supabaseClient.from('payments').update({
+      status: {
+        approved: true,
+        verified: true,
+        completed: true,
+        cancelled: false,
+        error: 'amount_mismatch_after_completion',
+      },
+      updated_at: new Date().toISOString(),
+    }).eq('payment_id', paymentId);
+    return respond({ ...AMOUNT_MISMATCH_AFTER_COMPLETION, paymentId, txid }, 400);
+  };
 
   log.info(`${FN}.request.received`, { stage: 'validation' });
 
@@ -163,6 +229,50 @@ Deno.serve(async (req) => {
           txid: existingPayment.txid ?? paymentRequest.txid,
         }, 500);
       }
+      if (existingPayment.status.error === 'amount_mismatch_after_completion') {
+        log.error(`${FN}.terminal.amount_mismatch_after_completion`, { stage: 'transition' });
+        return respond({
+          ...AMOUNT_MISMATCH_AFTER_COMPLETION,
+          paymentId: paymentRequest.paymentId,
+          txid: existingPayment.txid ?? paymentRequest.txid,
+        }, 400);
+      }
+      // The function died between completing and granting. The row says which plan was paid for,
+      // whatever this request says
+      const approvedTier = existingPayment.metadata?.subscriptionTier;
+      if (
+        approvedTier &&
+        existingPayment.approved_amount_pi != null &&
+        !existingPayment.status.plan_activated &&
+        !existingPayment.status.error
+      ) {
+        log.warn(`${FN}.terminal.granting_missed_plan`, { stage: 'transition', tier: approvedTier });
+        const txid = existingPayment.txid ?? paymentRequest.txid;
+        const failure = await activatePlan(
+          paymentRequest.paymentId,
+          txid,
+          paymentRequest.userId,
+          approvedTier,
+          existingPayment.metadata?.frequency === 'annual' ? 'annual' : 'monthly',
+        );
+        if (failure) return failure;
+        const notified = await createPaymentNotification(
+          supabaseClient,
+          paymentRequest.userId,
+          Number(existingPayment.approved_amount_pi),
+          approvedTier,
+        );
+        if (!notified.success) {
+          log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+        }
+        return respond({
+          success: true,
+          message: 'Payment completed successfully',
+          paymentId: paymentRequest.paymentId,
+          txid,
+          subscriptionCreated: true,
+        });
+      }
       log.info(`${FN}.terminal.idempotent`, { stage: 'transition', terminalReason: 'completed' });
       return respond({
         success: true,
@@ -202,32 +312,9 @@ Deno.serve(async (req) => {
         status: completeResponse.status,
       });
 
-      if (!completeResponse.ok) {
-        if (completeResult.message?.includes('already completed')) {
-          await supabaseClient.from('payments').update({
-            status: {
-              approved: true,
-              verified: true,
-              completed: true,
-              cancelled: false,
-            },
-            txid: paymentRequest.txid,
-            lifecycle_id: lifecycleId,
-            updated_at: new Date().toISOString(),
-          }).eq('payment_id', paymentRequest.paymentId);
+      const piAlreadyCompleted = !completeResponse.ok && !!completeResult.message?.includes('already completed');
 
-          log.transition(existingPayment?.status ?? null, 'completed', {
-            terminalReason: 'completed',
-            source: 'pi_already_completed',
-          });
-          return respond({
-            success: true,
-            message: 'Payment was already completed',
-            paymentId: paymentRequest.paymentId,
-            txid: paymentRequest.txid,
-          });
-        }
-
+      if (!completeResponse.ok && !piAlreadyCompleted) {
         await supabaseClient.from('payments').update({
           status: {
             approved: true,
@@ -257,6 +344,7 @@ Deno.serve(async (req) => {
           verified: true,
           completed: true,
           cancelled: false,
+          ...(existingPayment?.status?.plan_activated ? { plan_activated: true } : {}),
         },
         txid: paymentRequest.txid,
         lifecycle_id: lifecycleId,
@@ -265,7 +353,26 @@ Deno.serve(async (req) => {
 
       log.transition(existingPayment?.status ?? 'approved', 'completed', {
         terminalReason: 'completed',
+        ...(piAlreadyCompleted ? { source: 'pi_already_completed' } : {}),
       });
+
+      // Pi says it was completed earlier: carry on only for what may have been missed, and only
+      // for this user's own row. With no row, anyone could claim a stranger's completed payment
+      if (piAlreadyCompleted) {
+        const requestKind = paymentRequest.metadata?.kind;
+        const canCarryOn = existingPayment?.approved_amount_pi != null
+          ? !existingPayment.status?.plan_activated
+          : (requestKind === 'wallet_topup' || requestKind === 'message_fee') && existingPayment?.metadata?.kind === requestKind;
+        if (!canCarryOn) {
+          log.info(`${FN}.terminal.idempotent`, { stage: 'transition', terminalReason: 'completed', source: 'pi_already_completed' });
+          return respond({
+            success: true,
+            message: 'Payment was already completed',
+            paymentId: paymentRequest.paymentId,
+            txid: paymentRequest.txid,
+          });
+        }
+      }
 
       // ✅ SECURITY: Verify the real completed Pi amount matches the
       // server-computed expected price for the requested tier/fee.
@@ -304,6 +411,27 @@ Deno.serve(async (req) => {
           paymentId: paymentRequest.paymentId,
           txid: paymentRequest.txid,
         }, 502);
+      }
+
+      // An amount approved for a plan only buys that plan, whatever this request asks for. Otherwise
+      // it could be credited as a top up, and the plan granted from the row on a retry as well
+      if (existingPayment?.approved_amount_pi != null) {
+        const approvedTier = existingPayment.metadata?.subscriptionTier;
+        const approvedFreq = existingPayment.metadata?.frequency === 'annual' ? 'annual' : 'monthly';
+        const requestFreq = paymentRequest.metadata?.frequency === 'annual' ? 'annual' : 'monthly';
+        if (paymentRequest.metadata?.subscriptionTier !== approvedTier || requestFreq !== approvedFreq) {
+          log.error(`${FN}.verify.plan_not_approved`, {
+            stage: 'validation',
+            tier: paymentRequest.metadata?.subscriptionTier,
+            freq: requestFreq,
+            approvedTier,
+            approvedFreq,
+          });
+          return respond({
+            success: false,
+            message: 'Payment does not match the plan that was approved',
+          }, 400);
+        }
       }
 
       // Wallet top-ups have no fixed expected price (user picks the amount),
@@ -372,27 +500,13 @@ Deno.serve(async (req) => {
         const freq = paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly';
         if (existingPayment?.approved_amount_pi != null) {
           // Checked against the price at approval, so a price move since can't refuse a payment
-          // the user has signed. That amount only covers the plan it was approved for
-          const approvedTier = existingPayment.metadata?.subscriptionTier;
-          const approvedFreq = existingPayment.metadata?.frequency === 'annual' ? 'annual' : 'monthly';
-          if (tier !== approvedTier || freq !== approvedFreq) {
-            log.error(`${FN}.verify.plan_not_approved`, {
-              stage: 'validation', tier, freq, approvedTier, approvedFreq,
-            });
-            return respond({
-              success: false,
-              message: 'Payment does not match the plan that was approved',
-            }, 400);
-          }
+          // the user has signed
           const approvedPi = Number(existingPayment.approved_amount_pi);
           if (verifiedPiAmount < approvedPi * AMOUNT_TOLERANCE) {
             log.error(`${FN}.verify.subscription_amount_mismatch`, {
               stage: 'validation', tier, freq, approvedPi, verifiedPiAmount,
             });
-            return respond({
-              success: false,
-              message: 'Payment amount does not match subscription price',
-            }, 400);
+            return await refuseAmountAfterCompletion(paymentRequest.paymentId, paymentRequest.txid);
           }
         } else {
           // Payments approved before approved_amount_pi existed
@@ -410,10 +524,7 @@ Deno.serve(async (req) => {
             log.error(`${FN}.verify.subscription_amount_mismatch`, {
               stage: 'verify', tier, freq, expectedPi, verifiedPiAmount,
             });
-            return respond({
-              success: false,
-              message: 'Payment amount does not match subscription price',
-            }, 400);
+            return await refuseAmountAfterCompletion(paymentRequest.paymentId, paymentRequest.txid);
           }
         }
       }
@@ -433,10 +544,7 @@ Deno.serve(async (req) => {
           log.error(`${FN}.verify.message_fee_amount_mismatch`, {
             stage: 'verify', expectedFeePi, verifiedPiAmount,
           });
-          return respond({
-            success: false,
-            message: 'Payment amount does not match message fee',
-          }, 400);
+          return await refuseAmountAfterCompletion(paymentRequest.paymentId, paymentRequest.txid);
         }
         // Pin fee to the server-side expected value to prevent forged metadata.
         (paymentRequest.metadata as any).feePi = expectedFeePi;
@@ -487,48 +595,14 @@ Deno.serve(async (req) => {
 
 
       if (paymentRequest.metadata?.subscriptionTier) {
-        let planError: string | null = null;
-        try {
-          const { error: subscriptionError } = await supabaseClient.rpc('handle_subscription_after_payment', {
-            p_user_id: paymentRequest.userId,
-            p_username: null,
-            p_email: null,
-            p_subscription_tier: paymentRequest.metadata.subscriptionTier,
-            p_frequency: paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly',
-          });
-          if (subscriptionError) planError = subscriptionError.message;
-        } catch (subscriptionErr) {
-          planError = subscriptionErr instanceof Error ? subscriptionErr.message : String(subscriptionErr);
-        }
-
-        if (planError !== null) {
-          log.error(`${FN}.subscription.not_activated`, {
-            stage: 'db_write',
-            tier: paymentRequest.metadata.subscriptionTier,
-            message: planError,
-          });
-          // Marked on the row so a retry doesn't report success, and so support can find it
-          await supabaseClient.from('payments').update({
-            status: {
-              approved: true,
-              verified: true,
-              completed: true,
-              cancelled: false,
-              error: 'plan_not_activated',
-            },
-            updated_at: new Date().toISOString(),
-          }).eq('payment_id', paymentRequest.paymentId);
-          return respond({
-            ...PLAN_NOT_ACTIVATED,
-            paymentId: paymentRequest.paymentId,
-            txid: paymentRequest.txid,
-          }, 500);
-        }
-
-        log.info(`${FN}.subscription.created`, {
-          stage: 'db_write',
-          tier: paymentRequest.metadata.subscriptionTier,
-        });
+        const failure = await activatePlan(
+          paymentRequest.paymentId,
+          paymentRequest.txid,
+          paymentRequest.userId,
+          paymentRequest.metadata.subscriptionTier,
+          paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly',
+        );
+        if (failure) return failure;
       }
 
       try {

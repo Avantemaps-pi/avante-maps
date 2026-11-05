@@ -10,6 +10,9 @@ export const SUBSCRIPTION_USD_PRICES: Record<string, { monthly: number; annual: 
 // 0.5% tolerance to accommodate FX rounding at price-conversion time.
 export const AMOUNT_TOLERANCE = 0.995;
 
+/** A plan's π price, rounded up to 0.01. The toFixed drops float noise, or an exact 65.19 would become 65.20 */
+export const roundUpPi = (amount: number) => Math.ceil(Number((amount * 100).toFixed(6))) / 100;
+
 export type ExpectedPlanPi =
   | { ok: true; expectedPi: number }
   | { ok: false; error: 'invalid_tier' | 'price_unavailable' };

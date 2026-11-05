@@ -5,6 +5,7 @@
  */
 import { assert, assertEquals } from 'jsr:@std/assert@1';
 import { installFakeSupabase, loadHandler, setFunctionEnv } from '../../../tests/deno/fakeSupabase.ts';
+import { roundUpPi } from '../_shared/prices.ts';
 
 setFunctionEnv();
 const handler = await loadHandler(new URL('./index.ts', import.meta.url).href);
@@ -21,13 +22,14 @@ const test = (name: string, fn: () => Promise<void>) =>
 type PayArgs = { p_user_id: string; p_tier: string; p_frequency: string; p_amount_pi: number; p_request_id: string };
 
 /** pay_plan_from_balance as the migration behaves: idempotent per reference, P0001 when short */
-function setup(options: { balance?: number; priceUsd?: number | null; rpcError?: { code: string; message: string } } = {}) {
+function setup(options: { balance?: number; priceUsd?: number | null; rpcError?: { code: string; message: string }; notificationsFail?: boolean } = {}) {
   let balance = options.balance ?? 100;
   const references = new Set<string>();
   const debits: PayArgs[] = [];
   const fake = installFakeSupabase({
-    tables: { pi_price: options.priceUsd === null ? [] : [{ id: 1, price_usd: options.priceUsd ?? 0.0767 }] },
+    tables: { pi_price: options.priceUsd === null ? [] : [{ id: 1, price_usd: options.priceUsd ?? 0.0767 }], wallet_ledger: [], notifications: [] },
     users: { 'owner-token': OWNER, 'other-token': OTHER },
+    failInserts: options.notificationsFail ? ['notifications'] : [],
     rpc: (name, args) => {
       assertEquals(name, 'pay_plan_from_balance');
       if (options.rpcError) return Response.json(options.rpcError, { status: 400 });
@@ -41,12 +43,13 @@ function setup(options: { balance?: number; priceUsd?: number | null; rpcError?:
         }, { status: 400 });
       }
       references.add(reference);
+      fake.tables['wallet_ledger']!.push({ id: references.size, user_id: pay.p_user_id, reference_id: reference });
       debits.push(pay);
       balance -= pay.p_amount_pi;
       return Response.json(balance);
     },
   });
-  return { fake, debits };
+  return { fake, debits, notifications: () => fake.tables['notifications']! };
 }
 
 const VALID = { kind: 'subscription', subscriptionTier: 'small-business', frequency: 'monthly', requestId: REQUEST_ID };
@@ -101,7 +104,7 @@ test('the amount comes from the price table and pi_price, not the body', async (
   const { fake, debits } = setup({ balance: 5000 });
   const monthly = await call({ ...VALID, amount: 0.01, amountPi: 0.01, p_amount_pi: 0.01 });
   assertEquals(monthly.status, 200);
-  assertEquals(debits[0]!.p_amount_pi, 65.19); // $5 at $0.0767, to 2 decimals as the page shows it
+  assertEquals(debits[0]!.p_amount_pi, 65.19); // $5 at $0.0767 is 65.189, rounded up as the page shows it
   assertEquals(monthly.json.amountPi, 65.19);
   const annual = await call({ ...VALID, subscriptionTier: 'organization', frequency: 'annual', requestId: '22222222-2222-4222-8222-222222222222', amount: 1 });
   assertEquals(debits[1]!.p_amount_pi, 1251.63); // $96
@@ -160,4 +163,73 @@ test('another P0001 is not reported as an insufficient balance', async () => {
   assertEquals(json.error_code, undefined);
   assert(!JSON.stringify(json).includes('No completed payment'));
   fake.restore();
+});
+
+test('the amount is rounded up: 625.8104 is 625.82, not the nearest 625.81', async () => {
+  const { fake, debits } = setup({ balance: 5000, priceUsd: 48 / 625.8104 });
+  await call({ ...VALID, frequency: 'annual' });
+  assertEquals(debits[0]!.p_amount_pi, 625.82);
+  fake.restore();
+});
+
+test('an exact amount stays as it is: 65.19 does not become 65.20', async () => {
+  const { fake, debits } = setup({ priceUsd: 5 / 65.19 });
+  await call(VALID);
+  assertEquals(debits[0]!.p_amount_pi, 65.19);
+  fake.restore();
+});
+
+test('roundUpPi: rounds up, and float noise does not add a cent', () => {
+  assertEquals(roundUpPi(625.8104), 625.82);
+  assertEquals(roundUpPi(65.19), 65.19);
+  assertEquals(roundUpPi(1.1 + 2.2), 3.3); // 3.3000000000000003
+  assertEquals(roundUpPi(65.181), 65.19);
+  assertEquals(roundUpPi(10), 10);
+  return Promise.resolve();
+});
+
+test('a new payment gets a notification, naming the amount and the plan', async () => {
+  const { fake, notifications } = setup();
+  assertEquals((await call(VALID)).status, 200);
+  assertEquals(notifications().length, 1);
+  const notification = notifications()[0]!;
+  assertEquals(notification['user_id'], OWNER);
+  assertEquals(notification['type'], 'payment');
+  assert(String(notification['content']).includes('65.19'));
+  assert(String(notification['content']).includes('small-business'));
+  fake.restore();
+});
+
+test('a repeated requestId gets no second notification', async () => {
+  const { fake, debits, notifications } = setup();
+  await call(VALID);
+  const again = await call(VALID);
+  assertEquals(again.status, 200);
+  assertEquals(debits.length, 1);
+  assertEquals(notifications().length, 1);
+  fake.restore();
+});
+
+test('another user with the same requestId is not treated as a repeat by the lookup', async () => {
+  const { fake, notifications } = setup();
+  await call(VALID, 'other-token');
+  assertEquals(notifications().length, 1);
+  assertEquals(notifications()[0]!['user_id'], OTHER);
+  fake.restore();
+});
+
+test('a notification that fails still returns success', async () => {
+  const { fake, debits, notifications } = setup({ notificationsFail: true });
+  const { status, json } = await call(VALID);
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(debits.length, 1);
+  assertEquals(notifications().length, 0);
+  fake.restore();
+});
+
+test('no notification when the payment fails', async () => {
+  const short = setup({ balance: 3.2 });
+  assertEquals((await call(VALID)).status, 409);
+  assertEquals(short.notifications().length, 0);
+  short.fake.restore();
 });

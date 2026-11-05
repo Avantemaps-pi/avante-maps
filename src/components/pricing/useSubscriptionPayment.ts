@@ -122,7 +122,7 @@ export const useSubscriptionPayment = () => {
         polling.reset();
         toast.error("The price changed. Please try again.");
         return 'amount_mismatch';
-      } else if (result?.errorCode === 'plan_not_activated') {
+      } else if (result?.errorCode === 'plan_not_activated' || result?.errorCode === 'amount_mismatch_after_completion') {
         // The row is completed, so the poller would show "your subscription is active"
         polling.reset();
         toast.error(result.message);

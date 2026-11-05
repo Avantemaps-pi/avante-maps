@@ -41,7 +41,7 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
   const queryClient = useQueryClient();
   const { refreshUserData } = useAuth();
   const { balance, isLoading: isBalanceLoading, isError: isBalanceError, refetch: refetchBalance } = useWalletBalance();
-  const { convertUsdToPi, convertUsdToPiRoundedUp, isLoading: isPriceLoading, error: piPriceError, refresh: refreshPrice } = usePiPrice();
+  const { convertUsdToPiRoundedUp, isLoading: isPriceLoading, error: piPriceError, refresh: refreshPrice } = usePiPrice();
   const [choice, setChoice] = useState<PayMethod | null>(null);
   const [isPaying, setIsPaying] = useState(false);
   // One id per attempt at a plan, kept when the sheet is closed and reopened: if a response is lost,
@@ -58,9 +58,8 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
   const tier = TIERS.find(({ id }) => id === tierId);
   const isYearly = frequency === 'yearly';
   const usd = tier ? tier.price[isYearly ? 'yearly' : 'monthly'] : null;
-  const balanceAmount = typeof usd === 'number' ? convertUsdToPi(usd) : null;
-  const piWalletAmount = typeof usd === 'number' ? convertUsdToPiRoundedUp(usd) : null;
-  const price = balanceAmount === null ? null : Number(balanceAmount);
+  const piAmount = typeof usd === 'number' ? convertUsdToPiRoundedUp(usd) : null;
+  const price = piAmount === null ? null : Number(piAmount);
 
   // usePiPrice falls back to a made-up rate when pi_price can't be read, and the server checks the
   // real one, so neither payment is offered with an amount that may be wrong
@@ -71,8 +70,7 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
   const hasEnough = !isBalanceRowLoading && !balanceUnavailable && price !== null && balance >= price;
   const notEnough = !isBalanceRowLoading && !balanceUnavailable && !hasEnough;
   const method: PayMethod | null = priceUnavailable ? null : hasEnough ? (choice ?? 'balance') : 'pi';
-  // The server charges the balance to the nearest 0.01 π. A Pi payment is rounded up
-  const amountShown = !priceReady ? null : method === 'balance' ? balanceAmount : piWalletAmount;
+  const amountShown = priceReady ? piAmount : null;
 
   const handleOpenChange = (next: boolean) => {
     if (!next && isPaying) return;
@@ -112,9 +110,9 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
     if (!tier) return;
     if (method === 'balance') {
       payWithBalance();
-    } else if (method === 'pi' && piWalletAmount !== null) {
+    } else if (method === 'pi' && price !== null) {
       onOpenChange(false);
-      onPayWithPi(tier.id, Number(piWalletAmount));
+      onPayWithPi(tier.id, price);
     }
   };
 
@@ -193,7 +191,7 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
 
         <Button type="button" className="h-11 w-full" disabled={isPaying || !priceReady} onClick={handleContinue}>
           {isPaying && <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />}
-          {method === 'balance' ? `Pay ${balanceAmount} π from balance` : 'Continue in Pi Wallet'}
+          {method === 'balance' ? `Pay ${piAmount} π from balance` : 'Continue in Pi Wallet'}
         </Button>
         <p className="text-center text-xs text-muted-foreground">Covers 1 {isYearly ? 'year' : 'month'} from today.</p>
       </SheetContent>

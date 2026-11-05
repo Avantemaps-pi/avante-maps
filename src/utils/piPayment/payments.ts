@@ -31,7 +31,7 @@ export interface PaymentResult {
   message: string;
   shouldRefreshUser?: boolean;
   paymentId?: string;
-  /** Why the server refused, when it says: amount_mismatch, plan_not_activated */
+  /** Why the server refused, when it says: amount_mismatch, plan_not_activated, amount_mismatch_after_completion */
   errorCode?: string;
 }
 
