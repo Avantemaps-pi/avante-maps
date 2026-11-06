@@ -63,6 +63,8 @@ export const formSchema = z.object({
   countryCode: z.string().default('+1'),
   phone: z.string().min(1, { message: "Phone number is required" }).min(4, { message: "Phone number is too short" }).max(15, { message: "Phone number is too long" }),
   email: z.string().email({ message: "Invalid email address" }),
+  // Update business only: email the owner when a customer messages the business
+  notifyNewMessageEmail: z.boolean().optional().default(true),
   website: z.string().optional().refine((val) => {
     if (!val) return true;
     // Must start with https://

@@ -217,6 +217,7 @@ export const BusinessUpdateForm = forwardRef<BusinessUpdateFormRef, BusinessUpda
                 isSubmitting={isSubmitting}
                 existingImages={existingImages}
                 onRemoveExistingImage={removeExistingImage}
+                confirmedEmail={business.contactEmailVerifiedFor}
               />
             </Tabs>
           </form>

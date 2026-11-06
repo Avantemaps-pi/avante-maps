@@ -131,6 +131,7 @@ export type Database = {
           lat: number | null
           lng: number | null
           location: string | null
+          notify_new_message_email: boolean
           owner_id: string
           pi_wallet_address: string | null
           search_vector: unknown
@@ -163,6 +164,7 @@ export type Database = {
           lat?: number | null
           lng?: number | null
           location?: string | null
+          notify_new_message_email?: boolean
           owner_id: string
           pi_wallet_address?: string | null
           search_vector?: unknown
@@ -195,6 +197,7 @@ export type Database = {
           lat?: number | null
           lng?: number | null
           location?: string | null
+          notify_new_message_email?: boolean
           owner_id?: string
           pi_wallet_address?: string | null
           search_vector?: unknown

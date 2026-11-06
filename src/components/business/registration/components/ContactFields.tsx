@@ -197,9 +197,11 @@ interface ContactFieldsProps {
   disabled?: boolean | undefined;
   /** Registration steps: sentence-case labels in the steps' label style */
   stepLabels?: boolean | undefined;
+  /** Shown under the email field (Update business: the new-message email switch) */
+  afterEmail?: React.ReactNode;
 }
 
-const ContactFields: React.FC<ContactFieldsProps> = ({ disabled, stepLabels }) => {
+const ContactFields: React.FC<ContactFieldsProps> = ({ disabled, stepLabels, afterEmail }) => {
   const form = useFormContext<FormValues>();
 
   const [countryCode, setCountryCode] = React.useState(() => {
@@ -310,6 +312,7 @@ const ContactFields: React.FC<ContactFieldsProps> = ({ disabled, stepLabels }) =
           </FormItem>
         )}
       />
+      {afterEmail}
       <FormField
         control={form.control}
         name="website"

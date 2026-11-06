@@ -41,6 +41,7 @@ const ROW = {
   created_at: '2026-10-01T00:00:00Z', lat: -33.92, lng: 18.421, business_types: ['Food'], keywords: [], location: 'Cape Town',
   street_address: '12 Dock Road', state: 'Western Cape', zip_code: '8001', coordinates: null,
   contact_info: CONTACT, hours: HOURS, pi_wallet_address: WALLET,
+  notify_new_message_email: true, contact_email_verified_for: null,
 };
 
 const NEW_POSITION = { lat: -33.9321, lng: 18.8602 };
@@ -420,4 +421,67 @@ test.describe('the Hours step at 1024px', () => {
     expect(close.y).toBe(open.y);
     expect(closed.x).toBeLessThan(open.x);
   });
+});
+
+// ---- New-message emails switch (Contact tab, under the email)
+
+const emailSwitch = (page: Page) => page.getByRole('switch', { name: 'Email me when a customer messages this business' });
+const CONFIRMED = 'Sent to your confirmed contact email.';
+const UNCONFIRMED = 'Confirm your contact email in CommuniCon to get these emails.';
+
+test('the new-message email switch loads its stored value, and saving sends the change', async ({ page }) => {
+  const { patches } = await setup(page, { ...ROW, notify_new_message_email: false, contact_email_verified_for: CONTACT.email });
+  await fromList(page);
+  await tab(page, 'Contact').tap();
+  await expect(emailSwitch(page)).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByText(CONFIRMED)).toBeVisible();
+  // Under the email field, above the website
+  const switchBox = (await emailSwitch(page).boundingBox())!;
+  expect(switchBox.y).toBeGreaterThan((await page.locator('#email').boundingBox())!.y);
+  expect(switchBox.y).toBeLessThan((await page.locator('#website').boundingBox())!.y);
+
+  await emailSwitch(page).tap();
+  await expect(emailSwitch(page)).toHaveAttribute('aria-checked', 'true');
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]!['notify_new_message_email']).toBe(true);
+});
+
+test('the switch defaults to on, and saving unchanged keeps it on', async ({ page }) => {
+  const { patches } = await setup(page);
+  await page.goto(`/update-registration/${ID}`);
+  await tab(page, 'Contact').tap();
+  await expect(emailSwitch(page)).toHaveAttribute('aria-checked', 'true');
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]!['notify_new_message_email']).toBe(true);
+});
+
+test("an unconfirmed contact email: the helper says to confirm it; a changed email isn't confirmed either", async ({ page }) => {
+  await setup(page);
+  await page.goto(`/update-registration/${ID}`);
+  await tab(page, 'Contact').tap();
+  await expect(page.getByText(UNCONFIRMED)).toBeVisible();
+  await expect(page.getByText(CONFIRMED)).toHaveCount(0);
+});
+
+test('a confirmed email reads as confirmed until a different one is typed', async ({ page }) => {
+  await setup(page, { ...ROW, contact_email_verified_for: CONTACT.email });
+  await page.goto(`/update-registration/${ID}`);
+  await tab(page, 'Contact').tap();
+  await expect(page.getByText(CONFIRMED)).toBeVisible();
+  await page.locator('#email').fill('new@harbour.example');
+  await expect(page.getByText(UNCONFIRMED)).toBeVisible();
+  // Same address, different case and spaces: still the confirmed one
+  await page.locator('#email').fill(' Hello@Harbour.example ');
+  await expect(page.getByText(CONFIRMED)).toBeVisible();
+});
+
+test('a business loaded without the switch column: saving leaves it out', async ({ page }) => {
+  const { notify_new_message_email: _n, ...partial } = ROW;
+  const { patches } = await setup(page, partial);
+  await page.goto(`/update-registration/${ID}`);
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).not.toHaveProperty('notify_new_message_email');
 });
