@@ -4,6 +4,7 @@ import { Map, LayoutGrid, Bookmark, MessageSquare, Settings } from 'lucide-react
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useKeyboardOpen } from '@/hooks/useKeyboardOpen';
+import { useUnreadMessagesCount, formatUnreadCount } from '@/hooks/useUnreadMessagesCount';
 
 const navItems = [
   { to: '/recommendations', icon: LayoutGrid, label: 'Discover' },
@@ -23,6 +24,7 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ onItemClick }) => {
   const location = useLocation();
   const [visible, setVisible] = useState(true);
   const keyboardOpen = useKeyboardOpen();
+  const unreadMessages = useUnreadMessagesCount();
   const lastScrollY = useRef(0);
 
   useEffect(() => {
@@ -58,11 +60,12 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ onItemClick }) => {
       <div className="flex items-center justify-around h-16">
         {navItems.map(({ to, icon: Icon, label }) => {
           const isActive = location.pathname === to;
+          const unread = to === '/communicon' ? unreadMessages : 0;
           return (
             <Link
               key={to}
               to={to}
-              aria-label={label}
+              aria-label={unread > 0 ? `${label}, ${unread} unread` : label}
               onClick={() => onItemClick?.(to)}
               className={cn(
                 'flex flex-col items-center justify-center gap-1 flex-1 h-full text-xs transition-colors',
@@ -73,11 +76,20 @@ const BottomNavBar: React.FC<BottomNavBarProps> = ({ onItemClick }) => {
             >
               <span
                 className={cn(
-                  'flex h-7 w-14 items-center justify-center rounded-full',
+                  'relative flex h-7 w-14 items-center justify-center rounded-full',
                   isActive && 'bg-accent'
                 )}
               >
                 <Icon className="h-5 w-5" strokeWidth={isActive ? 2.5 : 2} />
+                {unread > 0 && (
+                  <span
+                    data-unread-badge
+                    aria-hidden="true"
+                    className="absolute -top-0.5 left-[calc(50%+3px)] flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold leading-none text-primary-foreground ring-2 ring-surface-float"
+                  >
+                    {formatUnreadCount(unread)}
+                  </span>
+                )}
               </span>
               <span className="leading-none">{label}</span>
             </Link>
