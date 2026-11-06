@@ -16,6 +16,7 @@ import { Route as BookmarksRouteImport } from './routes/bookmarks'
 import { Route as CommuniconRouteImport } from './routes/communicon'
 import { Route as ContactRouteImport } from './routes/contact'
 import { Route as CookiesRouteImport } from './routes/cookies'
+import { Route as DiagnosticsRouteImport } from './routes/diagnostics'
 import { Route as NotificationAdminRouteImport } from './routes/notification-admin'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as PricingRouteImport } from './routes/pricing'
@@ -66,6 +67,11 @@ const ContactRoute = ContactRouteImport.update({
 const CookiesRoute = CookiesRouteImport.update({
   id: '/cookies',
   path: '/cookies',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DiagnosticsRoute = DiagnosticsRouteImport.update({
+  id: '/diagnostics',
+  path: '/diagnostics',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NotificationAdminRoute = NotificationAdminRouteImport.update({
@@ -158,6 +164,7 @@ export interface FileRoutesByFullPath {
   '/communicon': typeof CommuniconRoute
   '/contact': typeof ContactRoute
   '/cookies': typeof CookiesRoute
+  '/diagnostics': typeof DiagnosticsRoute
   '/notification-admin': typeof NotificationAdminRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -183,6 +190,7 @@ export interface FileRoutesByTo {
   '/communicon': typeof CommuniconRoute
   '/contact': typeof ContactRoute
   '/cookies': typeof CookiesRoute
+  '/diagnostics': typeof DiagnosticsRoute
   '/notification-admin': typeof NotificationAdminRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -209,6 +217,7 @@ export interface FileRoutesById {
   '/communicon': typeof CommuniconRoute
   '/contact': typeof ContactRoute
   '/cookies': typeof CookiesRoute
+  '/diagnostics': typeof DiagnosticsRoute
   '/notification-admin': typeof NotificationAdminRoute
   '/notifications': typeof NotificationsRoute
   '/pricing': typeof PricingRoute
@@ -236,6 +245,7 @@ export interface FileRouteTypes {
     | '/communicon'
     | '/contact'
     | '/cookies'
+    | '/diagnostics'
     | '/notification-admin'
     | '/notifications'
     | '/pricing'
@@ -261,6 +271,7 @@ export interface FileRouteTypes {
     | '/communicon'
     | '/contact'
     | '/cookies'
+    | '/diagnostics'
     | '/notification-admin'
     | '/notifications'
     | '/pricing'
@@ -286,6 +297,7 @@ export interface FileRouteTypes {
     | '/communicon'
     | '/contact'
     | '/cookies'
+    | '/diagnostics'
     | '/notification-admin'
     | '/notifications'
     | '/pricing'
@@ -312,6 +324,7 @@ export interface RootRouteChildren {
   CommuniconRoute: typeof CommuniconRoute
   ContactRoute: typeof ContactRoute
   CookiesRoute: typeof CookiesRoute
+  DiagnosticsRoute: typeof DiagnosticsRoute
   NotificationAdminRoute: typeof NotificationAdminRoute
   NotificationsRoute: typeof NotificationsRoute
   PricingRoute: typeof PricingRoute
@@ -379,6 +392,13 @@ declare module '@tanstack/react-router' {
       path: '/cookies'
       fullPath: '/cookies'
       preLoaderRoute: typeof CookiesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/diagnostics': {
+      id: '/diagnostics'
+      path: '/diagnostics'
+      fullPath: '/diagnostics'
+      preLoaderRoute: typeof DiagnosticsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/notification-admin': {
@@ -504,6 +524,7 @@ const rootRouteChildren: RootRouteChildren = {
   CommuniconRoute: CommuniconRoute,
   ContactRoute: ContactRoute,
   CookiesRoute: CookiesRoute,
+  DiagnosticsRoute: DiagnosticsRoute,
   NotificationAdminRoute: NotificationAdminRoute,
   NotificationsRoute: NotificationsRoute,
   PricingRoute: PricingRoute,
