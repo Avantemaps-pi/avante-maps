@@ -38,6 +38,7 @@ const session = {
   },
 };
 const SUPABASE = 'https://xvpwbocwasbtzrzrxyvu.supabase.co';
+const OWN_BUSINESS = { id: 9001, business_name: 'Harbour Light Coffee' };
 const OTHER_CUSTOMER = '00000000-0000-0000-0000-0000000000aa';
 
 interface ConversationRow {
@@ -148,7 +149,7 @@ async function mockRealtime(page: Page) {
 async function setup(
   page: Page,
   rows: ConversationRow[],
-  options: { signedOut?: boolean; scheme?: string } = {},
+  options: { signedOut?: boolean; scheme?: string; owned?: boolean } = {},
 ) {
   const conversationRequests: string[] = [];
   await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
@@ -186,6 +187,10 @@ async function setup(
       })),
     });
   });
+  // The user owns business 9001 when options.owned (the count and the inbox picker ask for it)
+  await page.route('**/rest/v1/businesses*', (route) =>
+    route.fulfill({ json: options.owned ? [OWN_BUSINESS] : [] }),
+  );
   const realtime = await mockRealtime(page);
   await page.addInitScript(
     (s) => localStorage.setItem('supabase.auth.token', JSON.stringify(s)),
@@ -252,16 +257,24 @@ test('customer: 2 + 1 unread shows 3 on the nav and the Messages tab', async ({
 test("owner: business_unread on their business's conversations counts, customer_unread on them doesn't", async ({
   page,
 }) => {
-  await setup(page, [
-    // A customer's conversation with the user's business
-    conversation('b1', {
-      customer_id: OTHER_CUSTOMER,
-      business_unread: 4,
-      customer_unread: 7,
-    }),
-    // The user's own conversation as a customer
-    conversation('c1', { customer_unread: 1, business_unread: 5 }),
-  ]);
+  await setup(
+    page,
+    [
+      // A customer's conversation with the user's business
+      conversation('b1', {
+        customer_id: OTHER_CUSTOMER,
+        business_unread: 4,
+        customer_unread: 7,
+      }),
+      // The user's own conversation as a customer, with someone else's business
+      conversation('c1', {
+        business_id: 5005,
+        customer_unread: 1,
+        business_unread: 5,
+      }),
+    ],
+    { owned: true },
+  );
   await openMap(page);
   await expect(navBadge(page)).toHaveText('5');
   await expect(
@@ -348,4 +361,123 @@ test('0 unread: no badge, no pill, plain accessible name', async ({ page }) => {
   await expect(page.getByText('Preview c1')).toBeVisible();
   await expect(messagesPill(page)).toHaveCount(0);
   await expect(page.getByRole('tab')).toHaveText(['Messages', 'Bot']);
+});
+
+// ---- The inbox picker (an owner's Messages)
+
+const picker = (page: Page) => page.getByRole('combobox', { name: 'Inbox' });
+const pickerDot = (page: Page) =>
+  picker(page).locator('[data-inbox-unread-dot]');
+const option = (page: Page, name: string) =>
+  page.getByRole('option', { name: new RegExp(`^${name}`) });
+
+test('"My messages" selected with an unread message on a business: the closed picker has the dot, the open one shows 1 on the business', async ({
+  page,
+}) => {
+  await setup(
+    page,
+    [conversation('b1', { customer_id: OTHER_CUSTOMER, business_unread: 1 })],
+    { owned: true },
+  );
+  await page.goto('/communicon');
+  await expect(picker(page)).toContainText('My messages');
+  await expect(pickerDot(page)).toBeVisible();
+  await expect(picker(page)).toHaveAccessibleDescription(
+    'Unread messages in another inbox',
+  );
+  // The dot sits at the right, just before the chevron
+  const dot = (await pickerDot(page).boundingBox())!;
+  const box = (await picker(page).boundingBox())!;
+  expect(dot.x).toBeGreaterThan(box.x + box.width - 60);
+
+  await picker(page).tap();
+  await expect(
+    option(page, 'Harbour Light Coffee').locator('[data-inbox-unread]'),
+  ).toHaveText('1 unread');
+  await expect(
+    option(page, 'My messages').locator('[data-inbox-unread]'),
+  ).toHaveCount(0);
+});
+
+test('switching to the business and reading the message clears the dot', async ({
+  page,
+}) => {
+  await setup(
+    page,
+    [conversation('b1', { customer_id: OTHER_CUSTOMER, business_unread: 1 })],
+    { owned: true },
+  );
+  await page.goto('/communicon');
+  await expect(pickerDot(page)).toBeVisible();
+  await picker(page).tap();
+  await option(page, 'Harbour Light Coffee').tap();
+  // The business's own unread isn't "another inbox"
+  await expect(pickerDot(page)).toHaveCount(0);
+  await page.getByText('Preview b1').tap();
+  await page.getByRole('button', { name: 'Back to conversations' }).tap();
+  await picker(page).tap();
+  await option(page, 'My messages').tap();
+  await expect(picker(page)).toContainText('My messages');
+  await expect(pickerDot(page)).toHaveCount(0);
+  await expect(picker(page)).not.toHaveAttribute('aria-describedby');
+  await picker(page).tap();
+  await expect(page.locator('[data-inbox-unread]')).toHaveCount(0);
+});
+
+test('a business inbox selected with unread in "My messages": the dot shows, and the count is on My messages', async ({
+  page,
+}) => {
+  await setup(
+    page,
+    [conversation('c1', { business_id: 5005, customer_unread: 2 })],
+    { owned: true },
+  );
+  await page.goto('/communicon');
+  await picker(page).tap();
+  await expect(
+    option(page, 'My messages').locator('[data-inbox-unread]'),
+  ).toHaveText('2 unread');
+  await option(page, 'Harbour Light Coffee').tap();
+  await expect(pickerDot(page)).toBeVisible();
+});
+
+test('0 unread anywhere: no dot and no pills in the picker', async ({
+  page,
+}) => {
+  await setup(
+    page,
+    [
+      conversation('b1', { customer_id: OTHER_CUSTOMER }),
+      conversation('c1', { business_id: 5005 }),
+    ],
+    { owned: true },
+  );
+  await page.goto('/communicon');
+  await expect(picker(page)).toContainText('My messages');
+  await page.waitForTimeout(500);
+  await expect(pickerDot(page)).toHaveCount(0);
+  await picker(page).tap();
+  await expect(option(page, 'Harbour Light Coffee')).toBeVisible();
+  await expect(page.locator('[data-inbox-unread]')).toHaveCount(0);
+});
+
+test('messaging their own business: the business side counts too (nav badge 1)', async ({
+  page,
+}) => {
+  // The user is the customer and owns business 9001
+  await setup(
+    page,
+    [conversation('self', { customer_unread: 0, business_unread: 1 })],
+    { owned: true },
+  );
+  await openMap(page);
+  await expect(navBadge(page)).toHaveText('1');
+  await expect(
+    nav(page).getByRole('link', { name: 'CommuniCon, 1 unread' }),
+  ).toBeVisible();
+  await page.goto('/communicon');
+  await picker(page).tap();
+  await expect(
+    option(page, 'Harbour Light Coffee').locator('[data-inbox-unread]'),
+  ).toHaveText('1 unread');
 });
