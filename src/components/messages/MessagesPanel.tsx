@@ -18,8 +18,22 @@ import { StateBlock } from '@/components/ui/state-block';
 import { toast } from 'sonner';
 import { useLocation, useNavigate } from '@/lib/router-compat';
 import { useStickToBottom } from '@/hooks/useStickToBottom';
+import { useUnreadMessageCounts, formatUnreadCount } from '@/hooks/useUnreadMessagesCount';
 
 type OwnedBusiness = { id: number; business_name: string };
+
+// An inbox's unread count after its name in the picker, like the conversation rows' and the
+// Messages tab's (hidden at 0)
+const InboxUnreadPill = ({ count }: { count: number }) =>
+  count > 0 ? (
+    <span
+      data-inbox-unread
+      className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold leading-none text-primary-foreground"
+    >
+      {formatUnreadCount(count)}
+      <span className="sr-only"> unread</span>
+    </span>
+  ) : null;
 
 // Last owned-businesses result per Supabase user, so the inbox picker shows on the
 // first frame instead of popping in (and pushing the list down) after the query
@@ -186,6 +200,15 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
 
   const isBusinessInbox = inbox?.kind === 'business';
 
+  // Unread per inbox, from the same query (and realtime refresh) as the nav badge
+  const unread = useUnreadMessageCounts();
+  const inboxUnread = (key: string) =>
+    key === 'customer' ? unread.customer : unread.byBusiness[Number(key.replace('b:', ''))] ?? 0;
+  const otherInboxUnread =
+    (inboxKey !== 'customer' && unread.customer > 0) ||
+    ownedBusinesses.some((b) => `b:${b.id}` !== inboxKey && (unread.byBusiness[b.id] ?? 0) > 0);
+  const selectedBusiness = ownedBusinesses.find((b) => `b:${b.id}` === inboxKey);
+
   const activeConv = conversations.find((c) => c.id === activeConvId);
   const selectedBusinessName =
     ownedBusinesses.find((b) => `b:${b.id}` === inboxKey)?.business_name ?? 'this business';
@@ -207,19 +230,42 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
       {!activeConvId && ownedBusinesses.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-background">
           <Select value={inboxKey} onValueChange={(v) => { setInboxKey(v); setActiveConvId(null); }}>
-            <SelectTrigger className="h-11 text-sm w-full" aria-label="Inbox">
-              <SelectValue />
+            <SelectTrigger
+              className="h-11 text-sm w-full"
+              aria-label="Inbox"
+              {...(otherInboxUnread ? { 'aria-describedby': 'inbox-unread-elsewhere' } : {})}
+            >
+              {/* The selected inbox without its count: the dot is for the other inboxes */}
+              <SelectValue>
+                <span className="flex items-center gap-2">
+                  {selectedBusiness ? (
+                    <><Store className="h-4 w-4" /> {selectedBusiness.business_name}</>
+                  ) : (
+                    <><UserIcon className="h-4 w-4" /> My messages</>
+                  )}
+                </span>
+              </SelectValue>
+              {otherInboxUnread && (
+                <>
+                  <svg data-inbox-unread-dot aria-hidden="true" viewBox="0 0 8 8" className="ml-auto mr-2 h-2 w-2 shrink-0 fill-primary">
+                    <circle cx="4" cy="4" r="4" />
+                  </svg>
+                  <span id="inbox-unread-elsewhere" className="sr-only">Unread messages in another inbox</span>
+                </>
+              )}
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="customer" className="min-h-11 text-sm">
                 <span className="flex items-center gap-2">
                   <UserIcon className="h-4 w-4" /> My messages
+                  <InboxUnreadPill count={inboxUnread('customer')} />
                 </span>
               </SelectItem>
               {ownedBusinesses.map((b) => (
                 <SelectItem key={b.id} value={`b:${b.id}`} className="min-h-11 text-sm">
                   <span className="flex items-center gap-2">
                     <Store className="h-4 w-4" /> {b.business_name}
+                    <InboxUnreadPill count={inboxUnread(`b:${b.id}`)} />
                   </span>
                 </SelectItem>
               ))}
