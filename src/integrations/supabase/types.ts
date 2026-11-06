@@ -1560,6 +1560,13 @@ export type Database = {
           views_this_week: number
         }[]
       }
+      get_conversation_customer_names: {
+        Args: { p_conversation_ids: string[] }
+        Returns: {
+          conversation_id: string
+          username: string
+        }[]
+      }
       get_landing_stats: { Args: never; Returns: Json }
       get_public_business_detail: {
         Args: { business_id: number }

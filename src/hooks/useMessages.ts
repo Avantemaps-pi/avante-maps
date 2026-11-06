@@ -10,6 +10,7 @@ import {
 } from '@/lib/pendingConversationQueue';
 import { recordReauthEvent, type ReauthEventType } from '@/utils/telemetry/reauthTelemetry';
 import { getSessionUserId } from '@/lib/sessionUserId';
+import { secureLog } from '@/utils/secureLogger';
 import { UNREAD_MESSAGES_QUERY_KEY } from '@/hooks/useUnreadMessagesCount';
 
 export interface Conversation {
@@ -54,6 +55,8 @@ export function useMessages(inbox: Inbox | null) {
   // True when the last conversation-list request failed (cleared on the next success).
   const [convsError, setConvsError] = useState(false);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
+  // Business inbox: the Pi username of each conversation's customer, by conversation id
+  const [customerNames, setCustomerNames] = useState<Record<string, string>>({});
   const channelRef = useRef<any>(null);
   // Deduplicate in-flight startConversationWithBusiness calls per businessId.
   // Recently-resolved promises are also kept for a short TTL so rapid repeat
@@ -208,6 +211,40 @@ export function useMessages(inbox: Inbox | null) {
     if (!inboxKey) return;
     loadConversationsRef.current();
   }, [inboxKey]);
+
+  // Business inbox: customers' usernames, from an owner-only RPC (users RLS hides other users'
+  // rows). Asked once this inbox's own list has loaded (not the previous inbox's, still shown
+  // while switching), and again only when the set of conversations changes, not their order.
+  // On an error the inbox keeps the "Customer …" labels
+  const customerIdsKey =
+    inbox?.kind === 'business' && convsLoadedFor === inboxKey
+      ? conversations.map((c) => c.id).sort().join(',')
+      : '';
+  useEffect(() => {
+    if (!customerIdsKey) return;
+    let cancelled = false;
+    (async () => {
+      const ids = customerIdsKey.split(',').slice(0, 200);
+      const { data, error } = await supabase.rpc('get_conversation_customer_names', {
+        p_conversation_ids: ids,
+      });
+      if (cancelled) return;
+      if (error) {
+        secureLog.warn('get_conversation_customer_names failed', { code: error.code });
+        return;
+      }
+      setCustomerNames((prev) => {
+        const next = { ...prev };
+        for (const row of data ?? []) {
+          if (row.username) next[row.conversation_id] = row.username;
+        }
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [customerIdsKey]);
 
   // Realtime: refresh on new messages affecting any of our conversations
   useEffect(() => {
@@ -596,6 +633,7 @@ export function useMessages(inbox: Inbox | null) {
     convsError,
     loadingMsgs,
     totalUnread,
+    customerNames,
     openConversation,
     startConversationWithBusiness,
     sendMessage,
