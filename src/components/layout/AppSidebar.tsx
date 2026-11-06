@@ -7,6 +7,7 @@ import MobileSidebar from './sidebar/MobileSidebar';
 import { navItems } from './sidebar/sidebarConfig';
 import { getUnreadNotificationsCount } from '@/utils/notificationUtils';
 import { useAuth } from '@/context/auth';
+import { useUnreadMessagesCount } from '@/hooks/useUnreadMessagesCount';
 
 interface AppSidebarProps {
   className?: string;
@@ -18,6 +19,7 @@ const AppSidebar = ({ className }: AppSidebarProps = {}) => {
   const isMobile = useIsMobile();
   const { isAdmin } = useAuth();
   const [notificationCount, setNotificationCount] = useState(0);
+  const unreadMessages = useUnreadMessagesCount();
   
   useEffect(() => {
     const updateNotifications = async () => {
@@ -38,13 +40,15 @@ const AppSidebar = ({ className }: AppSidebarProps = {}) => {
     setOpenMobile(false);
   };
 
-  // Filter admin-only items and update notification badge
+  // Filter admin-only items and update the notification and unread message badges
   const filteredNavItems = navItems
     .filter(item => !item.adminOnly || isAdmin)
     .map(item => 
       item.to === '/notifications' 
         ? { ...item, badge: notificationCount }
-        : item
+        : item.to === '/communicon'
+          ? { ...item, badge: unreadMessages }
+          : item
     );
 
   return (

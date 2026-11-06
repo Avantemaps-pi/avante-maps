@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { Bot, MessageSquare } from 'lucide-react';
 import { ChatMode } from './ChatInterface';
+import { useUnreadMessagesCount, formatUnreadCount } from '@/hooks/useUnreadMessagesCount';
 
 interface ChatModeToggleProps {
   chatMode: ChatMode;
@@ -19,6 +20,7 @@ const ChatModeToggle: React.FC<ChatModeToggleProps> = ({
   onChatModeChange,
 }) => {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const unreadMessages = useUnreadMessagesCount();
 
   // Left/Right move between the tabs (and switch mode); the active tab is the one Tab stop
   const handleKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -54,6 +56,15 @@ const ChatModeToggle: React.FC<ChatModeToggleProps> = ({
             >
               <Icon className="h-4 w-4" aria-hidden="true" />
               {label}
+              {value === 'live' && unreadMessages > 0 && (
+                <span
+                  data-unread-pill
+                  className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold leading-none text-primary-foreground"
+                >
+                  {formatUnreadCount(unreadMessages)}
+                  <span className="sr-only"> unread</span>
+                </span>
+              )}
             </button>
           );
         })}
