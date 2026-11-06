@@ -3,9 +3,10 @@
  * supabase-js (auth "get user" and the PostgREST table endpoints), installed as
  * globalThis.fetch. Other hosts (Brevo, Pi Horizon) go to `external`.
  *
- * Supports what the contact functions use: select with eq/in filters, single
- * and maybeSingle, update (PATCH) with eq filters and returned rows, and upsert
- * (POST with on_conflict). RPC calls go to `rpc`.
+ * Supports what the functions use: select with eq/in/lt/gt filters, single
+ * and maybeSingle, update (PATCH) with filters and returned rows, upsert
+ * (POST with on_conflict), insert that fails on a duplicate key (primaryKeys)
+ * and delete. RPC calls go to `rpc`.
  */
 
 export type Row = Record<string, unknown>;
@@ -58,6 +59,9 @@ const matches = (row: Row, params: URLSearchParams) => {
     const [op, ...rest] = raw.split('.');
     const value = rest.join('.');
     if (op === 'eq' && String(row[key]) !== value) return false;
+    // ISO timestamps compare correctly as strings
+    if (op === 'lt' && !(String(row[key]) < value)) return false;
+    if (op === 'gt' && !(String(row[key]) > value)) return false;
     if (op === 'in') {
       const list = value.replace(/^\(|\)$/g, '').split(',');
       if (!list.includes(String(row[key]))) return false;
@@ -74,6 +78,8 @@ export function installFakeSupabase(options: {
   rpc?: (name: string, args: Row) => Response;
   /** Tables whose inserts fail */
   failInserts?: string[];
+  /** Table → primary key column: a plain insert (no on_conflict) of an existing key fails with 23505 */
+  primaryKeys?: Record<string, string>;
 }): FakeSupabase {
   const fake: FakeSupabase = { tables: options.tables, calls: [], restore: () => (activeFetch = null) };
 
@@ -118,6 +124,13 @@ export function installFakeSupabase(options: {
 
     const body = JSON.parse((await req.text()) || 'null');
 
+    if (method === 'DELETE') {
+      const hit = rows.filter((r) => matches(r, url.searchParams));
+      // In place, so a test holding the array sees the change
+      for (const r of hit) rows.splice(rows.indexOf(r), 1);
+      return prefer.includes('return=representation') ? respond(hit) : new Response(null, { status: 204 });
+    }
+
     if (method === 'PATCH') {
       const hit = rows.filter((r) => matches(r, url.searchParams));
       hit.forEach((r) => Object.assign(r, body));
@@ -130,6 +143,13 @@ export function installFakeSupabase(options: {
 
     if (method === 'POST') {
       const conflict = url.searchParams.get('on_conflict');
+      const key = options.primaryKeys?.[table];
+      if (!conflict && key) {
+        const items = Array.isArray(body) ? body : [body];
+        if (items.some((item) => rows.some((r) => r[key] === item[key]))) {
+          return Response.json({ code: '23505', message: 'duplicate key value violates unique constraint' }, { status: 409 });
+        }
+      }
       for (const item of Array.isArray(body) ? body : [body]) {
         const existing = conflict ? rows.find((r) => r[conflict] === item[conflict]) : undefined;
         if (existing) Object.assign(existing, item);
