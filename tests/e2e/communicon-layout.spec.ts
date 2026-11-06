@@ -7,7 +7,7 @@
  * mocked. The sandbox mock session (honoured on localhost only) signs in, as
  * in keyboard-open.spec.ts.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 
 const SANDBOX_MOCK_KEY = 'avante_sandbox_mock_session';
 const STORAGE_KEY = 'avante_maps_auth';
@@ -80,6 +80,9 @@ async function setup(page: Page, opts: { owner?: boolean; businessesDelayMs?: nu
       localStorage.setItem('supabase.auth.token', JSON.stringify(session));
     }, fakeSession);
   }
+  // Roles are read for every signed-in user, owner or not. On the context, because a test that
+  // calls page.unrouteAll() between visits can have this request land while no page route is set
+  await page.context().route('**/rest/v1/user_roles*', (route) => route.fulfill({ json: [] }));
   await page.route('**/functions/v1/chat-ai', (route) =>
     route.fulfill({
       status: 200,

@@ -9,7 +9,7 @@
  * duplicate check, insert-business) are mocked, so nothing reaches the real
  * backend.
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Page, type Locator } from './helpers/fixtures';
 import { SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser } from './helpers/mapMocks';
 
 const SUPABASE = 'https://xvpwbocwasbtzrzrxyvu.supabase.co';

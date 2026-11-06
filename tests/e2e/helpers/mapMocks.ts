@@ -83,6 +83,12 @@ const reverseAnswer = (areas: MockArea[], url: URL) => {
   };
 };
 
+/** The map's business list, and no review ratings for it */
+export async function mockBusinessList(page: Page, rows: object[]) {
+  await page.route('**/rest/v1/rpc/get_public_business_info*', (route) => route.fulfill({ json: rows }));
+  await page.route('**/rest/v1/business_review_stats*', (route) => route.fulfill({ json: [] }));
+}
+
 /**
  * Mocks the map's outside calls (Pi SDK blocked, business list, IP location,
  * reverse geocoding) and signs in with the sandbox mock session. `storage`
@@ -96,7 +102,7 @@ export async function mockMap(
 ) {
   const centre = options.centre ?? CENTRE;
   await page.route('**/pi-sdk.js', (route) => route.abort());
-  await page.route('**/rest/v1/rpc/get_public_business_info*', (route) => route.fulfill({ json: rows }));
+  await mockBusinessList(page, rows);
   await page.route('https://ipwho.is/**', (route) =>
     route.fulfill({ json: { success: true, latitude: centre.lat, longitude: centre.lng } }),
   );

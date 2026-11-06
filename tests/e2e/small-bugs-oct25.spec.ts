@@ -12,7 +12,7 @@
  * get_public_business_info RPC. Signed-in cases use the sandbox mock session
  * (honoured on localhost only), as in keyboard-open.spec.ts.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 
 const SANDBOX_MOCK_KEY = 'avante_sandbox_mock_session';
 const STORAGE_KEY = 'avante_maps_auth';
@@ -66,6 +66,7 @@ async function setup(page: Page, opts: Setup = {}) {
   await page.route('**/rest/v1/rpc/get_public_business_info*', (route) =>
     route.fulfill({ json: [BAKERY, GADGETS] }),
   );
+  await page.route('**/rest/v1/business_review_stats*', (route) => route.fulfill({ json: [] }));
   for (const url of ['https://ipwho.is/**', 'https://ipapi.co/json/', 'https://get.geojs.io/v1/ip/geo.json']) {
     await page.route(url, (route) =>
       route.fulfill({ json: { success: true, latitude: 48.8566, longitude: 2.3522 } }),

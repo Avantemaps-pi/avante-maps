@@ -8,7 +8,7 @@
  * only), both through helpers/mapMocks.ts. The map is moved to zoom 17, where pins
  * stop clustering, so every business has its own pin.
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Page, type Locator } from './helpers/fixtures';
 import { CENTRE, mockMap, mockUser, pin, zoomToPins } from './helpers/mapMocks';
 
 const photo = (n: number) =>
@@ -60,6 +60,10 @@ const card = (page: Page, name: string) => page.locator('[data-strip-card]').fil
 
 async function openMap(page: Page, rows: typeof BUSINESSES = BUSINESSES) {
   await mockMap(page, rows);
+  // The + button asks how many businesses a signed-in user owns: none
+  await page.route('**/rest/v1/businesses*', (route) =>
+    route.request().method() === 'HEAD' ? route.fulfill({ status: 200, headers: { 'content-range': '*/0' } }) : route.fallback(),
+  );
   await page.goto('/');
   await zoomToPins(page, rows.slice(0, 6));
 }

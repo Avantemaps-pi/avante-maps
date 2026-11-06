@@ -6,7 +6,7 @@
  * six businesses round CENTRE each have their own pin and are all in view;
  * FAR is ~2km north, in view only further out.
  */
-import { test, expect, type Page, type Locator } from '@playwright/test';
+import { test, expect, type Page, type Locator } from './helpers/fixtures';
 import { CENTRE, mockMap, mockUser, pin, zoomToPins } from './helpers/mapMocks';
 
 const SUPABASE = 'https://xvpwbocwasbtzrzrxyvu.supabase.co';

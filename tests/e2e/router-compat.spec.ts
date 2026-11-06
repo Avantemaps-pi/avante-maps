@@ -2,7 +2,7 @@
  * router-compat's useLocation, rendered with a real TanStack router (memory history, no
  * browser): search has exactly one leading "?", as react-router's does.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/fixtures';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';

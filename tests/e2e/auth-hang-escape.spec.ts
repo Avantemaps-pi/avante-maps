@@ -11,7 +11,8 @@
  * timeout that surfaces an error card with Try again / Dismiss, and
  * appReady always settling so the overlay can never latch.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/fixtures';
+import { NEARBY_BUSINESSES, mockBusinessList } from './helpers/mapMocks';
 
 // Generous budget: the 60s PI_AUTH_TIMEOUT_MS watchdog only starts once
 // requestAuthPermissions + the SDK-ready checks have run, so wall-clock time
@@ -26,6 +27,7 @@ test('hung Pi handshake surfaces an escape hatch, then a dismissible error', asy
   );
   // Block the real SDK so the stub below survives.
   await page.route('**/pi-sdk.js', (route) => route.abort());
+  await mockBusinessList(page, NEARBY_BUSINESSES);
   await page.addInitScript(() => {
     (window as unknown as { Pi: object }).Pi = {
       init: () => undefined,

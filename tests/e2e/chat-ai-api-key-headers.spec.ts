@@ -13,7 +13,7 @@
  * request must carry `apikey` only. The chat-ai call is intercepted and
  * answered locally — nothing reaches the real function.
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/fixtures';
 
 test('chat-ai request sends the publishable key as apikey, never as Bearer', async ({ page }) => {
   await page.route('**/pi-sdk.js', (route) => route.abort());

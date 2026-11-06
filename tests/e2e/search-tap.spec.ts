@@ -12,7 +12,7 @@
  * Businesses are mocked and the map is moved to zoom 17, where each has its
  * own pin (helpers/mapMocks.ts).
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { NEARBY_BUSINESSES, mockMap, zoomToPins } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });

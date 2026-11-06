@@ -32,7 +32,8 @@
  * stubbing pattern from reauth-false-success.spec.ts, but the stub's
  * authenticate() never resolves or rejects instead of rejecting immediately).
  */
-import { test, expect } from '@playwright/test';
+import { test, expect } from './helpers/fixtures';
+import { NEARBY_BUSINESSES, mockBusinessList } from './helpers/mapMocks';
 
 // Generous budget: the 60s PI_AUTH_TIMEOUT_MS watchdog only starts once
 // requestAuthPermissions + the SDK-ready checks have run, so wall-clock time
@@ -70,6 +71,7 @@ test('hung Pi.authenticate() records exactly one pi_auth_timeout event via the b
 
   // Block the real Pi SDK so it can't overwrite the stub below.
   await page.route('**/pi-sdk.js', (route) => route.abort());
+  await mockBusinessList(page, NEARBY_BUSINESSES);
 
   await page.addInitScript(() => {
     // Stub Pi SDK: present and "initialized" (so preflight resolves to 'ok'
@@ -164,6 +166,7 @@ for (const failure of ['sync-throw', 'rejected', 'non-2xx'] as const) {
     });
 
     await page.route('**/pi-sdk.js', (route) => route.abort());
+    await mockBusinessList(page, NEARBY_BUSINESSES);
 
     await page.addInitScript(() => {
       // authenticate() rejects immediately, so pi_auth_error records right away

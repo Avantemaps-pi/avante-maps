@@ -7,7 +7,7 @@
  * Touch input at 375x812 with the sandbox mock session; every request to the
  * Supabase project is answered locally.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, NEARBY_BUSINESSES } from './helpers/mapMocks';
 
 const SUPABASE = 'https://xvpwbocwasbtzrzrxyvu.supabase.co';

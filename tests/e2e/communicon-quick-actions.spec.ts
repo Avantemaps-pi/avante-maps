@@ -5,7 +5,7 @@
  * Sandbox session plus a fake Supabase session (the verification flow loads the
  * owner's businesses with it); chat-ai and the Supabase tables are mocked.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page } from './helpers/fixtures';
 import { SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser } from './helpers/mapMocks';
 
 const UID = mockUser.uid;
@@ -20,26 +20,9 @@ const fakeSession = {
   user: { id: UID, aud: 'authenticated', role: 'authenticated', app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() },
 };
 
-// Requests that reached the real Supabase project: every test ends checking there were none.
-// verify-business wasn't mocked, so the check ran against the live function with the fake token,
-// got a 401, and the card turned into "Verification failed" whenever that answer came back
-// before the test looked
-const unmocked = new WeakMap<Page, string[]>();
-test.afterEach(async ({ page }) => {
-  expect(unmocked.get(page) ?? [], 'requests to the real Supabase project').toEqual([]);
-});
-
 const reply = { verified: false, contactConfirmed: false, reason: 'Contact email not confirmed', totalTransactions: 13, creditedTransactions: 4, uniqueWallets: 9 };
 
 async function setup(page: Page) {
-  // Registered first, so it only sees what no other route handles
-  const leaked: string[] = [];
-  unmocked.set(page, leaked);
-  await page.route('https://xvpwbocwasbtzrzrxyvu.supabase.co/**', (route) => {
-    const url = new URL(route.request().url());
-    leaked.push(`${route.request().method()} ${url.pathname}`);
-    return route.abort();
-  });
   await page.route('**/pi-sdk.js', (route) => route.abort());
   await page.route('**/auth/v1/**', (route) => route.fulfill({ json: fakeSession.user }));
   for (const t of ['users', 'user_roles', 'conversations', 'messages', 'notifications']) {
