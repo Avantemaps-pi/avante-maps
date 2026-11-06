@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/context/auth';
 import { toast } from 'sonner';
@@ -9,6 +10,7 @@ import {
 } from '@/lib/pendingConversationQueue';
 import { recordReauthEvent, type ReauthEventType } from '@/utils/telemetry/reauthTelemetry';
 import { getSessionUserId } from '@/lib/sessionUserId';
+import { UNREAD_MESSAGES_QUERY_KEY } from '@/hooks/useUnreadMessagesCount';
 
 export interface Conversation {
   id: string;
@@ -40,6 +42,7 @@ export type Inbox =
 
 export function useMessages(inbox: Inbox | null) {
   const { user, login, refreshUserData } = useAuth();
+  const queryClient = useQueryClient();
   const uid = user?.uid;
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -269,9 +272,11 @@ export function useMessages(inbox: Inbox | null) {
           ? { customer_unread: 0 }
           : { business_unread: 0 };
       await supabase.from('conversations').update(update).eq('id', convId);
+      // The nav and switch badges follow straight away
+      void queryClient.invalidateQueries({ queryKey: UNREAD_MESSAGES_QUERY_KEY });
       loadConversations();
     },
-    [loadMessages, inbox, uid, loadConversations],
+    [loadMessages, inbox, uid, loadConversations, queryClient],
   );
 
   const startConversationWithBusiness = useCallback(
