@@ -12,6 +12,7 @@ import ContactOTPVerification from '@/components/chat/ContactOTPVerification';
 import { verificationProgress } from '@/components/chat/verificationProgress';
 import type { ContactOTPResult } from '@/components/chat/ContactOTPVerification';
 import { OPEN_PENDING_CONTACT_CODE_EVENT, loadPendingContactCode } from '@/components/chat/pendingContactCode';
+import { supabase } from '@/integrations/supabase/client';
 
 // The code entry dialog: a pending code being resumed, or a code from the email's confirm link
 interface CodeDialogState {
@@ -34,6 +35,14 @@ const readConfirmLink = (search: string) => {
   const businessId = /^[1-9]\d{0,15}$/.test(business) ? Number(business) : NaN;
   const valid = /^\d{6}$/.test(code) && Number.isSafeInteger(businessId);
   return { present, link: valid ? { code, businessId } : null };
+};
+
+// The new-message email's "Reply in Avante Maps" link: ?conversation=<uuid>
+const readConversationLink = (search: string) => {
+  const params = new URLSearchParams(search.replace(/^\?+/, ''));
+  const id = params.get('conversation') ?? '';
+  const valid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  return { present: params.has('conversation'), id: valid ? id : null };
 };
 
 // The last tab the user picked in this visit (session)
@@ -105,11 +114,16 @@ const Communicon = () => {
     };
   }, [sendVerificationRequest, handleBusinessSelection]);
 
-  // Which tab opens. An incoming chatMode is handled by its own effect further down. These need
-  // the Bot tab for their card or code box; anything else opens on the last tab picked, or Messages
+  // Which tab opens. An incoming chatMode is handled by its own effect further down. A conversation
+  // link opens Messages, without changing the remembered tab. These need the Bot tab for their
+  // card or code box; anything else opens on the last tab picked, or Messages
   useEffect(() => {
     const state = location.state as any;
     if (state?.chatMode) return;
+    if (readConversationLink(location.search).present) {
+      handleChatModeChange('live');
+      return;
+    }
     const needsBot =
       !!state?.triggerVerification || readConfirmLink(location.search).present || !!loadPendingContactCode();
     handleChatModeChange(needsBot ? 'ai' : (readRememberedTab() ?? 'live'));
@@ -124,12 +138,17 @@ const Communicon = () => {
   const [codeDialog, setCodeDialog] = useState<CodeDialogState | null>(null);
   // The confirm link's code, kept until the user is signed in
   const [linkConfirm, setLinkConfirm] = useState<{ code: string; businessId: number } | null>(null);
+  // The conversation link's conversation, kept until the user is signed in
+  const [linkConversation, setLinkConversation] = useState<string | null>(null);
 
   // On arrival: take the confirm link's values (and take them out of the address bar and history
   // right away), or else reopen a code sent before a reload, without sending a new one
   useEffect(() => {
     const { present, link } = readConfirmLink(location.search);
-    if (present) navigate(location.pathname, { replace: true, state: location.state });
+    const conversationLink = readConversationLink(location.search);
+    if (present || conversationLink.present) navigate(location.pathname, { replace: true, state: location.state });
+    if (conversationLink.id) setLinkConversation(conversationLink.id);
+    else if (conversationLink.present) showConversationErrorToast('not_found');
     if (link) {
       setLinkConfirm(link);
     } else {
@@ -162,6 +181,35 @@ const Communicon = () => {
       setCodeDialog({ ...business, initialCode: code });
     })();
   }, [linkConfirm, authLoading, user, loadOwnedBusinessContact]);
+
+  // Once signed in, open the conversation link's conversation through the usual checks (the
+  // customer, or the owner of its business). An owner's opens in that business's inbox
+  useEffect(() => {
+    if (!linkConversation || authLoading || !user) return;
+    const conversationId = linkConversation;
+    setLinkConversation(null);
+    (async () => {
+      const result = await validateConversation(conversationId);
+      if (result !== 'valid') {
+        showConversationErrorToast(result, () => setLinkConversation(conversationId));
+        return;
+      }
+      const { data: { session } } = await supabase.auth.getSession();
+      const { data: conversation } = await supabase
+        .from('conversations')
+        .select('customer_id, business_id')
+        .eq('id', conversationId)
+        .maybeSingle();
+      const inboxBusinessId =
+        conversation && conversation.customer_id !== session?.user?.id ? conversation.business_id : undefined;
+      handleChatModeChange('live');
+      navigate(location.pathname, {
+        replace: true,
+        state: { ...((location.state as Record<string, unknown> | null) ?? {}), chatMode: 'live', openConversationId: conversationId, inboxBusinessId },
+      });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkConversation, authLoading, user]);
 
   // A link tapped twice: the code is used up, but the email is confirmed already
   const alreadyConfirmedRef = useRef(false);
@@ -207,19 +255,20 @@ const Communicon = () => {
 
   const showConversationErrorToast = (
     result: 'not_found' | 'access_denied' | 'missing',
-    onRetry: () => void,
+    onRetry?: () => void,
   ) => {
+    const action = onRetry ? { action: { label: 'Retry', onClick: onRetry } } : {};
     if (result === 'not_found') {
       toast.error('Conversation not found', {
         description:
           'This conversation does not exist or has been removed. Start a new one from the business listing.',
-        action: { label: 'Retry', onClick: onRetry },
+        ...action,
       });
     } else if (result === 'access_denied') {
       toast.error('Access denied', {
         description:
           "You don't have access to this conversation. Make sure you're logged into the correct account.",
-        action: { label: 'Retry', onClick: onRetry },
+        ...action,
       });
     }
   };

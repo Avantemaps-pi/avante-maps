@@ -234,6 +234,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {chatMode === 'live' ? (
             <MessagesPanel
+              // A new inbox from the page (CommuniCon's conversation link) starts the panel afresh
+              key={(location.state as any)?.inboxBusinessId ?? 'customer'}
               initialConversationId={(location.state as any)?.openConversationId ?? null}
               initialInboxBusinessId={(location.state as any)?.inboxBusinessId ?? null}
             />

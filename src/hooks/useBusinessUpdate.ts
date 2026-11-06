@@ -87,6 +87,11 @@ export const useBusinessUpdate = (business: Business, onSuccess?: () => void) =>
       } else {
         notLoaded.push('contact_info');
       }
+      if (business.notifyNewMessageEmail !== undefined) {
+        updatePayload['notify_new_message_email'] = values.notifyNewMessageEmail;
+      } else {
+        notLoaded.push('notify_new_message_email');
+      }
       if (business.hours !== undefined) {
         updatePayload['hours'] = {
           monday: { open: values.mondayOpen, close: values.mondayClose, closed: values.mondayClosed },

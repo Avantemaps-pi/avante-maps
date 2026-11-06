@@ -35,6 +35,10 @@ export interface Business {
   contactInfo?: BusinessContactInfo;
   hours?: BusinessHours;
   piWalletAddress?: string;
+  /** Email the owner when a customer messages the business (undefined when not loaded) */
+  notifyNewMessageEmail?: boolean;
+  /** The contact email confirmed through CommuniCon, lower-cased (null when none) */
+  contactEmailVerifiedFor?: string | null;
   images?: string[];
   lat?: number;
   lng?: number;

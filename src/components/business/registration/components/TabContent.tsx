@@ -20,6 +20,8 @@ interface TabContentProps {
   isSubmitting?: boolean;
   existingImages?: string[];
   onRemoveExistingImage?: (index: number) => void;
+  /** The contact email confirmed through CommuniCon, lower-cased (null when none) */
+  confirmedEmail?: string | null | undefined;
 }
 
 const TabContent: React.FC<TabContentProps> = ({ 
@@ -33,6 +35,7 @@ const TabContent: React.FC<TabContentProps> = ({
   isSubmitting,
   existingImages = [],
   onRemoveExistingImage,
+  confirmedEmail,
 }) => {
   return (
     <div className="w-full min-h-[500px]">
@@ -55,6 +58,7 @@ const TabContent: React.FC<TabContentProps> = ({
         <ContactTab 
           onNext={() => setSelectedTab('hours')} 
           onPrevious={() => setSelectedTab('address')} 
+          confirmedEmail={confirmedEmail}
           {...(isSubmitting !== undefined ? { disabled: isSubmitting } : {})}
         />
       </TabsContent>

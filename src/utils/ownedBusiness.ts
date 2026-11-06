@@ -1,8 +1,9 @@
 import { Business, BusinessContactInfo, BusinessHours } from '@/types/business';
 
-// Everything the Your businesses page and the edit form need. contact_info, hours and
-// pi_wallet_address must stay here: the edit form fills its fields from them and saves them back.
-export const OWNED_BUSINESS_COLUMNS = 'id, business_name, owner_id, category, business_description, city, country, images, is_verified, is_certified, verification_status, is_active, created_at, lat, lng, business_types, keywords, location, street_address, state, zip_code, coordinates, contact_info, hours, pi_wallet_address';
+// Everything the Your businesses page and the edit form need. contact_info, hours,
+// pi_wallet_address and notify_new_message_email must stay here: the edit form fills its fields
+// from them and saves them back.
+export const OWNED_BUSINESS_COLUMNS = 'id, business_name, owner_id, category, business_description, city, country, images, is_verified, is_certified, verification_status, is_active, created_at, lat, lng, business_types, keywords, location, street_address, state, zip_code, coordinates, contact_info, hours, pi_wallet_address, notify_new_message_email, contact_email_verified_for';
 
 export interface OwnedBusinessRow {
   id: number;
@@ -28,6 +29,8 @@ export interface OwnedBusinessRow {
   contact_info?: unknown;
   hours?: unknown;
   pi_wallet_address?: string | null;
+  notify_new_message_email?: boolean | null;
+  contact_email_verified_for?: string | null;
 }
 
 /** The Business the Your businesses page and the edit form work with */
@@ -57,9 +60,14 @@ export function toOwnedBusiness(row: OwnedBusinessRow): Business {
     ...(row.contact_info !== undefined ? { contactInfo: (row.contact_info ?? {}) as BusinessContactInfo } : {}),
     ...(row.hours !== undefined ? { hours: (row.hours ?? {}) as BusinessHours } : {}),
     ...(row.pi_wallet_address !== undefined ? { piWalletAddress: row.pi_wallet_address ?? '' } : {}),
+    ...(row.notify_new_message_email !== undefined ? { notifyNewMessageEmail: row.notify_new_message_email ?? true } : {}),
+    ...(row.contact_email_verified_for !== undefined ? { contactEmailVerifiedFor: row.contact_email_verified_for } : {}),
   } as Business;
 }
 
 /** Whether the edit form can safely open on this business without losing stored details */
 export const isBusinessComplete = (business: Business) =>
-  business.contactInfo !== undefined && business.hours !== undefined && business.piWalletAddress !== undefined;
+  business.contactInfo !== undefined &&
+  business.hours !== undefined &&
+  business.piWalletAddress !== undefined &&
+  business.notifyNewMessageEmail !== undefined;

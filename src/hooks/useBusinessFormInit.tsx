@@ -47,6 +47,7 @@ export const useBusinessFormInit = (business: Business) => {
       countryCode: phoneParsed.countryCode,
       phone: phoneParsed.nationalNumber,
       email: contactInfo.email || '',
+      notifyNewMessageEmail: business.notifyNewMessageEmail ?? true,
       website: contactInfo.website || '',
       streetAddress: business.streetAddress || '',
       apartment: '',
