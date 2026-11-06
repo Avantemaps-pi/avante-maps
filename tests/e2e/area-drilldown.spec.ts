@@ -11,6 +11,9 @@ import { test, expect, type Page } from './helpers/fixtures';
 import { AREA_FIXTURES, areaCentre, mockMap, NEARBY_BUSINESSES, pin, zoomToPins, CENTRE } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
+// Also set in playwright.config.ts. Kept here so a failed run of "List · N" always has its trace:
+// it times out waiting for the first pin in long full-suite runs only (see waitForFirstPin)
+test.use({ trace: 'retain-on-failure' });
 
 const COUNTRY = AREA_FIXTURES[0]!;
 // The middle of the map, clear of the top stack and the bottom controls
@@ -35,10 +38,66 @@ function trackLookups(page: Page) {
   return lookups;
 }
 
-async function openMapOverTestland(page: Page, rows: object[] = NEARBY_BUSINESSES) {
+// What the map was doing if the first pin never shows. Leaflet's map isn't reachable from the
+// page, so the zoom and the area on screen come from the tiles: their URLs are /{z}/{x}/{y}.png
+const mapState = (page: Page) =>
+  page.evaluate(() => {
+    const view = document.querySelector('.leaflet-container')?.getBoundingClientRect();
+    const tiles = [...document.querySelectorAll<HTMLImageElement>('img.leaflet-tile')]
+      .filter((img) => {
+        const r = img.getBoundingClientRect();
+        return view && r.right > view.left && r.left < view.right && r.bottom > view.top && r.top < view.bottom;
+      })
+      .map((img) => /\/(\d+)\/(\d+)\/(\d+)\.png/.exec(img.src))
+      .filter((m): m is RegExpExecArray => !!m)
+      .map((m) => ({ z: Number(m[1]), x: Number(m[2]), y: Number(m[3]) }));
+    const zoom = tiles.length ? Math.max(...tiles.map((t) => t.z)) : null;
+    const atZoom = tiles.filter((t) => t.z === zoom);
+    const lng = (x: number, z: number) => (x / 2 ** z) * 360 - 180;
+    const lat = (y: number, z: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** z))) * 180) / Math.PI;
+    const bounds =
+      zoom === null || !atZoom.length
+        ? null
+        : {
+            north: lat(Math.min(...atZoom.map((t) => t.y)), zoom),
+            south: lat(Math.max(...atZoom.map((t) => t.y)) + 1, zoom),
+            west: lng(Math.min(...atZoom.map((t) => t.x)), zoom),
+            east: lng(Math.max(...atZoom.map((t) => t.x)) + 1, zoom),
+          };
+    return {
+      markers: document.querySelectorAll('.leaflet-marker-icon').length,
+      zoomFromTiles: zoom,
+      boundsFromTiles: bounds,
+      mapPaneTransform: document.querySelector<HTMLElement>('.leaflet-map-pane')?.style.transform ?? null,
+      listButton: document.querySelector('[data-map-list-button]')?.textContent ?? null,
+      url: location.pathname,
+    };
+  });
+
+// The wait that times out in long runs: on a timeout, it logs (and attaches) the map's state first.
+// 45s, so the log lands before the test's own 60s timeout
+async function waitForFirstPin(page: Page, businessesResolved: () => boolean, timeout = 45_000) {
+  try {
+    await page.locator('.leaflet-marker-icon').first().waitFor({ state: 'attached', timeout });
+  } catch (error) {
+    const state = { ...(await mapState(page)), businessesRequestResolved: businessesResolved() };
+    console.log(`[first pin timed out] ${JSON.stringify(state)}`);
+    await test.info().attach('map state when the first pin timed out', {
+      body: JSON.stringify(state, null, 2),
+      contentType: 'application/json',
+    });
+    throw error;
+  }
+}
+
+async function openMapOverTestland(page: Page, rows: object[] = NEARBY_BUSINESSES, pinTimeout?: number) {
   await mockMap(page, rows, { areas: AREA_FIXTURES });
+  let businessesResolved = false;
+  page.on('response', (response) => {
+    if (response.url().includes('/rest/v1/rpc/get_public_business_info')) businessesResolved = true;
+  });
   await page.goto('/');
-  await page.locator('.leaflet-marker-icon').first().waitFor({ state: 'attached' });
+  await waitForFirstPin(page, () => businessesResolved, pinTimeout);
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(1_000);
   await centreMap(page, areaCentre(COUNTRY), 5);
