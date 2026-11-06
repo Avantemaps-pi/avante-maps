@@ -67,37 +67,64 @@ const stopLive = () => {
   onVisibilityChange = null;
 };
 
+export interface UnreadMessageCounts {
+  /** Everything: the user's own conversations plus their businesses' */
+  total: number;
+  /** customer_unread on conversations the user started ("My messages") */
+  customer: number;
+  /** business_unread per business the user owns, by business id */
+  byBusiness: Record<number, number>;
+}
+
+const NO_UNREAD: UnreadMessageCounts = {
+  total: 0,
+  customer: 0,
+  byBusiness: {},
+};
+
 /**
- * Unread messages across all of the user's conversations: as the customer, plus on the
- * businesses they own. 0 when signed out.
+ * Unread messages per inbox: as the customer, and on each business the user owns. Both sides
+ * count on a conversation with their own business. All zero when signed out.
  */
-export const useUnreadMessagesCount = () => {
+export const useUnreadMessageCounts = (): UnreadMessageCounts => {
   const { isAuthenticated, user } = useAuth();
   const queryClient = useQueryClient();
 
-  const { data = 0 } = useQuery({
+  const { data = NO_UNREAD } = useQuery({
     // The user is only in the key so one account's count is never shown to the next
     queryKey: [...UNREAD_MESSAGES_QUERY_KEY, user?.uid ?? null],
-    queryFn: async () => {
+    queryFn: async (): Promise<UnreadMessageCounts> => {
       // Ownership is checked against the live session's user, never user.uid
       const {
         data: { session },
       } = await supabase.auth.getSession();
       const userId = session?.user?.id;
-      if (!userId) return 0;
+      if (!userId) return NO_UNREAD;
 
       // RLS returns only conversations the user is the customer on or owns the business of
-      const { data: rows, error } = await supabase
-        .from('conversations')
-        .select('id, customer_id, customer_unread, business_unread');
-      if (error) throw error;
-      return (rows ?? []).reduce(
-        (total, c) =>
-          total +
-          ((c.customer_id === userId ? c.customer_unread : c.business_unread) ??
-            0),
-        0,
-      );
+      const [conversations, owned] = await Promise.all([
+        supabase
+          .from('conversations')
+          .select(
+            'id, business_id, customer_id, customer_unread, business_unread',
+          ),
+        supabase.from('businesses').select('id').eq('owner_id', userId),
+      ]);
+      if (conversations.error) throw conversations.error;
+      if (owned.error) throw owned.error;
+
+      const byBusiness: Record<number, number> = {};
+      for (const b of owned.data ?? []) byBusiness[b.id] = 0;
+      let customer = 0;
+      for (const c of conversations.data ?? []) {
+        if (c.customer_id === userId) customer += c.customer_unread ?? 0;
+        if (c.business_id in byBusiness)
+          byBusiness[c.business_id] =
+            (byBusiness[c.business_id] ?? 0) + (c.business_unread ?? 0);
+      }
+      const total =
+        customer + Object.values(byBusiness).reduce((n, count) => n + count, 0);
+      return { total, customer, byBusiness };
     },
     enabled: isAuthenticated,
     staleTime: 30 * 1000,
@@ -110,5 +137,8 @@ export const useUnreadMessagesCount = () => {
     return stopLive;
   }, [isAuthenticated, queryClient]);
 
-  return isAuthenticated ? data : 0;
+  return isAuthenticated ? data : NO_UNREAD;
 };
+
+/** All unread messages, for the nav and Messages-tab badges. 0 when signed out */
+export const useUnreadMessagesCount = () => useUnreadMessageCounts().total;
