@@ -114,8 +114,8 @@ const Notifications = () => {
     window.dispatchEvent(notificationUpdateEvent);
   };
   
-  const openNotification = (id: string, url: string) => {
-    void trackNotificationClick(id, url);
+  const openNotification = (id: string) => {
+    void trackNotificationClick(id);
   };
 
   // The current tab's unread rows only

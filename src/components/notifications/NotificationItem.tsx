@@ -18,7 +18,7 @@ interface NotificationItemProps {
   notification: NotificationProps;
   onReadNotification: (id: string) => void;
   /** The row or its action was opened: records the click (clicked_at) */
-  onOpenNotification?: (id: string, url: string) => void;
+  onOpenNotification?: (id: string) => void;
   isSelected?: boolean;
   onToggleSelection?: (id: string) => void;
   selectionMode?: boolean;
@@ -30,8 +30,9 @@ const TINTS: Record<NotificationTint, string> = {
   destructive: 'bg-destructive/15 text-destructive',
 };
 
-// click_url is an in-app path; anything else opens as a normal link
-const isInAppPath = (url: string) => url.startsWith('/') && !url.startsWith('//');
+// Only in-app paths are followed. The server always writes one; anything else (another site, a
+// javascript: URL, or // and /\ which browsers can read as another site) gets no link at all
+const isInAppPath = (url: string) => url.startsWith('/') && !url.startsWith('//') && !url.startsWith('/\\');
 
 // The text, with the person or business name in bold where it appears (or before it)
 const NotificationText = ({ content, name }: { content: string; name: string | null }) => {
@@ -72,7 +73,8 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   const kind = getNotificationKind(notification);
   const { icon: Icon, tint } = getKindConfig(kind);
   const name = getNotificationName(notification);
-  const action = getNotificationAction(notification);
+  const linked = getNotificationAction(notification);
+  const action = linked && isInAppPath(linked.url) ? linked : null;
   const emailed = wasAlsoEmailed(notification);
 
   const triggerHapticFeedback = () => {
@@ -85,7 +87,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   // Opening marks it read and records the click
   const recordOpen = () => {
     if (!read) onReadNotification(id);
-    if (action) onOpenNotification?.(id, action.url);
+    if (action) onOpenNotification?.(id);
   };
 
   const handleClick = () => {
@@ -96,10 +98,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
       return;
     }
     recordOpen();
-    if (action) {
-      if (isInAppPath(action.url)) navigate(action.url);
-      else window.location.assign(action.url);
-    }
+    if (action) navigate(action.url);
   };
 
   const handleActionClick = (e: React.MouseEvent) => {
@@ -219,16 +218,11 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
               {time}
               {emailed && <span> · Also emailed</span>}
             </p>
-            {action &&
-              (isInAppPath(action.url) ? (
-                <Link to={action.url} onClick={handleActionClick} className={actionClassName}>
-                  {action.label}
-                </Link>
-              ) : (
-                <a href={action.url} onClick={handleActionClick} className={actionClassName}>
-                  {action.label}
-                </a>
-              ))}
+            {action && (
+              <Link to={action.url} onClick={handleActionClick} className={actionClassName}>
+                {action.label}
+              </Link>
+            )}
           </div>
 
           {!read && !selectionMode && (

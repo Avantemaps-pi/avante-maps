@@ -537,9 +537,9 @@ test('tapping a row opens its link, marks it read and records the click', async 
   await expect
     .poll(() => tracked.find((t) => t['event_type'] === 'clicked'))
     .toEqual({
+      // No click_url: the row already has it, and track-notification would overwrite it
       notification_id: 'n-new_message',
       event_type: 'clicked',
-      click_url: KINDS[0]!.url,
     });
 });
 
@@ -558,4 +558,54 @@ test('the action link does the same', async ({ page }) => {
   await expect
     .poll(() => tracked.filter((t) => t['event_type'] === 'clicked').length)
     .toBe(1);
+});
+
+test('a click_url that is not an in-app path gets no action link, and tapping the row only marks it read', async ({
+  page,
+}) => {
+  const unsafe = [
+    'https://example.com',
+    'javascript:alert(1)',
+    '//evil.example/path',
+    '/\\evil.example',
+  ];
+  const rows = unsafe.map((url, i) => ({
+    ...kindRow(KINDS[6]!, 6),
+    id: `n-unsafe-${i}`,
+    content: `Unsafe link ${i}`,
+    created_at: todayAt(2 + i),
+    click_url: url,
+  }));
+  const { patches, tracked } = await setup(page, rows);
+  let dialogs = 0;
+  page.on('dialog', (dialog) => {
+    dialogs += 1;
+    void dialog.dismiss();
+  });
+  await open(page);
+  for (let i = 0; i < unsafe.length; i++) {
+    const r = page
+      .locator('[data-notification-row]')
+      .filter({ hasText: `Unsafe link ${i}` });
+    await expect(r, unsafe[i]).toHaveCount(1);
+    await expect(r.getByRole('link'), unsafe[i]).toHaveCount(0);
+    await expect(r.locator('a'), unsafe[i]).toHaveCount(0);
+    await r.getByText(`Unsafe link ${i}`).tap();
+    await expect
+      .poll(
+        () =>
+          patches.some(
+            (p) => p.query.includes(`n-unsafe-${i}`) && p.body['read'] === true,
+          ),
+        { message: unsafe[i] },
+      )
+      .toBe(true);
+    expect(new URL(page.url()).pathname, unsafe[i]).toBe('/notifications');
+  }
+  await page.waitForTimeout(500);
+  expect(dialogs).toBe(0);
+  expect(new URL(page.url()).pathname).toBe('/notifications');
+  // Nothing was opened, so no click is recorded either
+  expect(tracked.filter((t) => t['event_type'] === 'clicked')).toEqual([]);
+  expect(tracked.some((t) => 'click_url' in t)).toBe(false);
 });

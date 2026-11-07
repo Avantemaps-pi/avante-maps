@@ -45,14 +45,14 @@ export const markNotificationAsRead = async (id: string): Promise<void> => {
   }
 };
 
-// Records that the notification's action was opened (clicked_at and click_url, by track-notification)
-export const trackNotificationClick = async (id: string, clickUrl: string): Promise<void> => {
+// Records that the notification's action was opened (clicked_at, by track-notification). No
+// click_url: the row already has it, and track-notification would overwrite it with what's sent
+export const trackNotificationClick = async (id: string): Promise<void> => {
   try {
     await supabase.functions.invoke('track-notification', {
       body: {
         notification_id: id,
-        event_type: 'clicked',
-        click_url: clickUrl
+        event_type: 'clicked'
       }
     });
   } catch (trackError) {
