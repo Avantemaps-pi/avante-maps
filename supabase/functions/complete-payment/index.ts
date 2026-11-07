@@ -22,6 +22,23 @@ const AMOUNT_MISMATCH_AFTER_COMPLETION = {
   message: "Payment received, but it doesn't match the price. Please contact support.",
 };
 
+const PAYMENT_USER_MISMATCH = {
+  success: false,
+  error_code: 'payment_user_mismatch',
+  message: "This payment was started from a different Pi account. Sign in with the account you're paying from.",
+};
+
+const FEE_NOT_RECORDED = {
+  success: false,
+  message: 'Payment completed but the message fee could not be recorded. Please try again.',
+};
+
+// The row's status once the Pi has moved
+const COMPLETED_STATUS = { approved: true, verified: true, completed: true, cancelled: false };
+
+// Pi uids in logs: enough to tell them apart, never the whole value
+const shortUid = (uid: unknown) => (typeof uid === 'string' && uid ? `${uid.slice(0, 6)}…` : null);
+
 const PLAN_NAMES: Record<string, string> = {
   individual: 'Individual',
   'small-business': 'Small Business',
@@ -40,7 +57,7 @@ interface PaymentNotification {
 // The user's in-app notification, in the Notifications page's metadata contract (kind,
 // actionLabel; click_url the action's path). Never throws: a payment isn't undone by it
 async function notifyPayment(
-  supabase: ReturnType<typeof createClient>,
+  supabase: typeof supabaseClient,
   userId: string,
   n: PaymentNotification,
 ): Promise<{ success: boolean; error?: string }> {
@@ -64,7 +81,7 @@ async function notifyPayment(
 
 // A top up, or a plan paid for and active: the same text as before
 const notifyPaymentReceived = (
-  supabase: ReturnType<typeof createClient>,
+  supabase: typeof supabaseClient,
   userId: string,
   amount: number,
   subscriptionTier?: string,
@@ -126,24 +143,29 @@ Deno.serve(async (req) => {
       status,
     });
 
-  // Grants the plan and records it on the row. Returns the failure to send, or null when granted
+  // Grants the plan once per payment and records it on the row. Returns the failure to send, or
+  // whether this call granted it (false: an earlier call for this payment already did)
   const activatePlan = async (
     paymentId: string,
     txid: string,
     userId: string,
     tier: string,
     frequency: 'monthly' | 'annual',
-  ): Promise<Response | null> => {
+  ): Promise<{ failure: Response } | { granted: boolean }> => {
     let planError: string | null = null;
+    let granted = true;
     try {
-      const { error: subscriptionError } = await supabaseClient.rpc('handle_subscription_after_payment', {
+      const { data: grantedNow, error: subscriptionError } = await supabaseClient.rpc('handle_subscription_after_payment', {
         p_user_id: userId,
         p_username: null,
         p_email: null,
         p_subscription_tier: tier,
         p_frequency: frequency,
+        p_payment_id: paymentId,
       });
       if (subscriptionError) planError = subscriptionError.message;
+      // false: this payment's plan was granted before. (Before the migration it returned nothing)
+      granted = grantedNow !== false;
     } catch (subscriptionErr) {
       planError = subscriptionErr instanceof Error ? subscriptionErr.message : String(subscriptionErr);
     }
@@ -168,10 +190,10 @@ Deno.serve(async (req) => {
       if (!notified.success) {
         log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
       }
-      return respond({ ...PLAN_NOT_ACTIVATED, paymentId, txid }, 500);
+      return { failure: respond({ ...PLAN_NOT_ACTIVATED, paymentId, txid }, 500) };
     }
 
-    log.info(`${FN}.subscription.created`, { stage: 'db_write', tier });
+    log.info(granted ? `${FN}.subscription.created` : `${FN}.subscription.already_granted`, { stage: 'db_write', tier });
     const { error: markError } = await supabaseClient.from('payments').update({
       status: { ...baseStatus, plan_activated: true },
       updated_at: new Date().toISOString(),
@@ -179,7 +201,7 @@ Deno.serve(async (req) => {
     if (markError) {
       log.error(`${FN}.subscription.mark_failed`, { stage: 'db_write', message: markError.message });
     }
-    return null;
+    return { granted };
   };
 
   // The Pi has moved, but it wasn't the price. Marked so a retry gets this answer rather than success
@@ -274,6 +296,224 @@ Deno.serve(async (req) => {
       return respond({ success: false, message: 'Payment ownership mismatch' }, 403);
     }
 
+    const piNetworkApiUrl = 'https://api.minepi.com/v2/payments';
+
+    // The payment as Pi has it: the amount that moved and the Pi account that paid. null when Pi
+    // can't be reached (nothing is changed then, so a retry can carry on)
+    const fetchPiPayment = async (): Promise<{ amount: number | null; userUid: string | null } | null> => {
+      try {
+        const piGetResp = await fetch(`${piNetworkApiUrl}/${paymentRequest.paymentId}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Key ${piApiKey}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!piGetResp.ok) {
+          log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', status: piGetResp.status });
+          return null;
+        }
+        const piPayment = await piGetResp.json();
+        const amt = Number(piPayment?.amount);
+        return {
+          amount: Number.isFinite(amt) && amt > 0 ? amt : null,
+          userUid: typeof piPayment?.user_uid === 'string' && piPayment.user_uid ? piPayment.user_uid : null,
+        };
+      } catch (getErr) {
+        log.warn(`${FN}.pi_api.get_payment_exception`, {
+          stage: 'pi_api',
+          message: getErr instanceof Error ? getErr.message : String(getErr),
+        });
+        return null;
+      }
+    };
+
+    // Whether the Pi account that paid is the signed-in user's (users.pi_uid). Never throws: an
+    // exception in the completion block below would mark the row cancelled
+    const checkPayer = async (piUserUid: string | null): Promise<'match' | 'mismatch' | 'error'> => {
+      const { data: payer, error: payerError } = await supabaseClient
+        .from('users')
+        .select('pi_uid')
+        .eq('id', paymentRequest.userId)
+        .maybeSingle();
+      if (payerError) {
+        log.error(`${FN}.verify.user_lookup_error`, { stage: 'lookup', code: payerError.code });
+        return 'error';
+      }
+      const signedInPiUid = payer?.pi_uid ?? null;
+      if (signedInPiUid && piUserUid && signedInPiUid === piUserUid) return 'match';
+      log.error(`${FN}.verify.payment_user_mismatch`, {
+        stage: 'validation',
+        piUserUid: shortUid(piUserUid),
+        signedInPiUid: shortUid(signedInPiUid),
+      });
+      return 'mismatch';
+    };
+
+    // Paid from another Pi account: nothing is credited, recorded or granted. The Pi has moved, so
+    // the row stays completed, marked so a retry gets the same answer
+    const refusePayer = async (txid: string) => {
+      await supabaseClient.from('payments').update({
+        status: { ...COMPLETED_STATUS, error: 'payment_user_mismatch' },
+        updated_at: new Date().toISOString(),
+      }).eq('payment_id', paymentRequest.paymentId);
+      return respond({ ...PAYMENT_USER_MISMATCH, paymentId: paymentRequest.paymentId, txid }, 403);
+    };
+
+    // Pi's payment, checked: the response to send instead, or the amount that moved
+    const verifiedPayment = async (txid: string): Promise<{ response: Response } | { amount: number }> => {
+      const piPayment = await fetchPiPayment();
+      if (!piPayment || piPayment.amount === null) {
+        log.error(`${FN}.verify.amount_unavailable`, { stage: 'validation' });
+        return {
+          response: respond({
+            success: false,
+            message: 'Unable to verify payment amount',
+            paymentId: paymentRequest.paymentId,
+            txid,
+          }, 502),
+        };
+      }
+      const payer = await checkPayer(piPayment.userUid);
+      if (payer === 'error') {
+        return { response: respond({ success: false, message: 'Payment processing failed. Please try again.' }, 500) };
+      }
+      if (payer === 'mismatch') return { response: await refusePayer(txid) };
+      return { amount: piPayment.amount };
+    };
+
+    // A top up: Pi's amount is credited (once per payment), and the row says so
+    const creditTopUp = async (txid: string, amount: number): Promise<Response> => {
+      const { data: earlierCredit } = await supabaseClient
+        .from('wallet_ledger')
+        .select('id')
+        .eq('payment_id', paymentRequest.paymentId)
+        .maybeSingle();
+      const { data: newBalance, error: creditError } = await supabaseClient.rpc(
+        'credit_wallet_balance',
+        {
+          p_user_id: paymentRequest.userId,
+          p_amount_pi: amount,
+          p_payment_id: paymentRequest.paymentId,
+          p_transaction_type: 'deposit',
+        },
+      );
+
+      if (creditError) {
+        log.error(`${FN}.wallet_topup.credit_failed`, {
+          stage: 'error',
+          message: creditError.message,
+        });
+        return respond({
+          success: false,
+          message: 'Payment completed but wallet credit failed. Please contact support.',
+          paymentId: paymentRequest.paymentId,
+          txid,
+        }, 500);
+      }
+
+      await supabaseClient.from('payments').update({
+        status: { ...COMPLETED_STATUS, credited: true },
+        updated_at: new Date().toISOString(),
+      }).eq('payment_id', paymentRequest.paymentId);
+      log.info(`${FN}.wallet_topup.credited`, {
+        stage: 'db_write',
+        amount,
+        newBalance,
+        alreadyCredited: !!earlierCredit,
+      });
+
+      // Told once: not again for a payment credited before
+      if (!earlierCredit) {
+        const notified = await notifyPaymentReceived(supabaseClient, paymentRequest.userId, amount);
+        if (notified.success) {
+          log.info(`${FN}.notify.created`, { stage: 'notify' });
+        } else {
+          log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+        }
+      }
+
+      log.info(`${FN}.done`, {
+        stage: 'done',
+        terminalReason: 'completed',
+        durationMs: Date.now() - startTime,
+      });
+      return respond({
+        success: true,
+        message: 'Wallet credited successfully',
+        paymentId: paymentRequest.paymentId,
+        txid,
+        newBalance,
+      });
+    };
+
+    // A message fee: at least the platform fee must have moved; the fee row is written (once per
+    // payment) and the row says so. The response to send instead, or whether it was written now
+    const recordMessageFee = async (
+      txid: string,
+      amount: number,
+      md: { conversationId?: string; businessId?: number },
+    ): Promise<{ response: Response } | { recordedNow: boolean }> => {
+      const { data: feeSetting, error: feeSettingErr } = await supabaseClient
+        .from('platform_settings')
+        .select('value')
+        .eq('key', 'unverified_message_fee_pi')
+        .maybeSingle();
+      const expectedFeePi = Number(feeSetting?.value ?? 0.5);
+      if (feeSettingErr || !Number.isFinite(expectedFeePi) || expectedFeePi <= 0) {
+        log.error(`${FN}.verify.fee_setting_unavailable`, { stage: 'validation' });
+        return { response: respond({ success: false, message: 'Fee setting unavailable' }, 503) };
+      }
+      if (amount < expectedFeePi * AMOUNT_TOLERANCE) {
+        log.error(`${FN}.verify.message_fee_amount_mismatch`, {
+          stage: 'validation', expectedFeePi, verifiedPiAmount: amount,
+        });
+        return { response: await refuseAmountAfterCompletion(paymentRequest.paymentId, txid) };
+      }
+
+      let feeUsd = 0;
+      try {
+        const { data: priceRow } = await supabaseClient
+          .from('pi_price').select('price_usd').limit(1).maybeSingle();
+        feeUsd = Number(priceRow?.price_usd ?? 0) * expectedFeePi;
+      } catch (_) { /* non-fatal */ }
+
+      const { data: earlierFee } = await supabaseClient
+        .from('message_fees')
+        .select('id')
+        .eq('payment_id', paymentRequest.paymentId)
+        .maybeSingle();
+      // payment_id is UNIQUE, so a duplicate completion can't create two fee rows. ignoreDuplicates
+      // avoids overwriting a row that may already have message_id attached. The fee is pinned to
+      // the server's value, never the request's
+      const { error: feeError } = await supabaseClient
+        .from('message_fees')
+        .upsert({
+          conversation_id: md.conversationId,
+          sender_id: paymentRequest.userId,
+          business_id: md.businessId,
+          fee_pi: expectedFeePi,
+          fee_usd: feeUsd,
+          payment_id: paymentRequest.paymentId,
+          platform_share_pi: expectedFeePi,
+          business_share_pi: 0,
+          status: 'paid',
+        }, { onConflict: 'payment_id', ignoreDuplicates: true });
+      if (feeError) {
+        // Not marked, so a retry records it
+        log.error(`${FN}.message_fee.insert_error`, { stage: 'db_write', message: feeError.message });
+        return { response: respond({ ...FEE_NOT_RECORDED, paymentId: paymentRequest.paymentId, txid }, 500) };
+      }
+      await supabaseClient.from('payments').update({
+        status: { ...COMPLETED_STATUS, fee_recorded: true },
+        updated_at: new Date().toISOString(),
+      }).eq('payment_id', paymentRequest.paymentId);
+      log.info(`${FN}.message_fee.recorded`, {
+        stage: 'db_write', conversationId: md.conversationId, alreadyRecorded: !!earlierFee,
+      });
+      return { recordedNow: !earlierFee };
+    };
+
     if (existingPayment?.status?.completed) {
       if (existingPayment.txid && existingPayment.txid !== paymentRequest.txid) {
         log.error(`${FN}.lookup.txid_mismatch`, {
@@ -285,13 +525,18 @@ Deno.serve(async (req) => {
           message: 'Transaction ID mismatch on completed payment',
         }, 409);
       }
+      const txid = existingPayment.txid ?? paymentRequest.txid;
+      if (existingPayment.status.error === 'payment_user_mismatch') {
+        log.error(`${FN}.terminal.payment_user_mismatch`, { stage: 'transition' });
+        return respond({ ...PAYMENT_USER_MISMATCH, paymentId: paymentRequest.paymentId, txid }, 403);
+      }
       // A retry mustn't report success for a payment that never got its plan
       if (existingPayment.status.error === 'plan_not_activated') {
         log.error(`${FN}.terminal.plan_not_activated`, { stage: 'transition' });
         return respond({
           ...PLAN_NOT_ACTIVATED,
           paymentId: paymentRequest.paymentId,
-          txid: existingPayment.txid ?? paymentRequest.txid,
+          txid,
         }, 500);
       }
       if (existingPayment.status.error === 'amount_mismatch_after_completion') {
@@ -299,11 +544,12 @@ Deno.serve(async (req) => {
         return respond({
           ...AMOUNT_MISMATCH_AFTER_COMPLETION,
           paymentId: paymentRequest.paymentId,
-          txid: existingPayment.txid ?? paymentRequest.txid,
+          txid,
         }, 400);
       }
-      // The function died between completing and granting. The row says which plan was paid for,
-      // whatever this request says
+      // The function died between completing and granting, crediting or recording. The row says
+      // what was paid for, whatever this request says
+      const rowKind = existingPayment.metadata?.kind;
       const approvedTier = existingPayment.metadata?.subscriptionTier;
       if (
         approvedTier &&
@@ -312,23 +558,26 @@ Deno.serve(async (req) => {
         !existingPayment.status.error
       ) {
         log.warn(`${FN}.terminal.granting_missed_plan`, { stage: 'transition', tier: approvedTier });
-        const txid = existingPayment.txid ?? paymentRequest.txid;
-        const failure = await activatePlan(
+        const checked = await verifiedPayment(txid);
+        if ('response' in checked) return checked.response;
+        const plan = await activatePlan(
           paymentRequest.paymentId,
           txid,
           paymentRequest.userId,
           approvedTier,
           existingPayment.metadata?.frequency === 'annual' ? 'annual' : 'monthly',
         );
-        if (failure) return failure;
-        const notified = await notifyPaymentReceived(
-          supabaseClient,
-          paymentRequest.userId,
-          Number(existingPayment.approved_amount_pi),
-          approvedTier,
-        );
-        if (!notified.success) {
-          log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+        if ('failure' in plan) return plan.failure;
+        if (plan.granted) {
+          const notified = await notifyPaymentReceived(
+            supabaseClient,
+            paymentRequest.userId,
+            Number(existingPayment.approved_amount_pi),
+            approvedTier,
+          );
+          if (!notified.success) {
+            log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+          }
         }
         return respond({
           success: true,
@@ -338,12 +587,38 @@ Deno.serve(async (req) => {
           subscriptionCreated: true,
         });
       }
+      if (rowKind === 'wallet_topup' && !existingPayment.status.credited && !existingPayment.status.error) {
+        log.warn(`${FN}.terminal.crediting_missed_topup`, { stage: 'transition' });
+        const checked = await verifiedPayment(txid);
+        if ('response' in checked) return checked.response;
+        return await creditTopUp(txid, checked.amount);
+      }
+      if (rowKind === 'message_fee' && !existingPayment.status.fee_recorded && !existingPayment.status.error) {
+        log.warn(`${FN}.terminal.recording_missed_fee`, { stage: 'transition' });
+        const checked = await verifiedPayment(txid);
+        if ('response' in checked) return checked.response;
+        const fee = await recordMessageFee(txid, checked.amount, existingPayment.metadata ?? {});
+        if ('response' in fee) return fee.response;
+        if (fee.recordedNow) {
+          const notified = await notifyPaymentReceived(supabaseClient, paymentRequest.userId, checked.amount);
+          if (!notified.success) {
+            log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+          }
+        }
+        return respond({
+          success: true,
+          message: 'Payment completed successfully',
+          paymentId: paymentRequest.paymentId,
+          txid,
+          subscriptionCreated: false,
+        });
+      }
       log.info(`${FN}.terminal.idempotent`, { stage: 'transition', terminalReason: 'completed' });
       return respond({
         success: true,
         message: 'Payment was already completed',
         paymentId: paymentRequest.paymentId,
-        txid: existingPayment.txid ?? paymentRequest.txid,
+        txid,
       });
     }
 
@@ -360,7 +635,6 @@ Deno.serve(async (req) => {
 
     log.info(`${FN}.pi_api.call`, { stage: 'pi_api' });
     try {
-      const piNetworkApiUrl = 'https://api.minepi.com/v2/payments';
       const completeResponse = await fetch(`${piNetworkApiUrl}/${paymentRequest.paymentId}/complete`, {
         method: 'POST',
         headers: {
@@ -425,9 +699,12 @@ Deno.serve(async (req) => {
       // for this user's own row. With no row, anyone could claim a stranger's completed payment
       if (piAlreadyCompleted) {
         const requestKind = paymentRequest.metadata?.kind;
+        const rowStatus = existingPayment?.status ?? {};
         const canCarryOn = existingPayment?.approved_amount_pi != null
-          ? !existingPayment.status?.plan_activated
-          : (requestKind === 'wallet_topup' || requestKind === 'message_fee') && existingPayment?.metadata?.kind === requestKind;
+          ? !rowStatus.plan_activated
+          : existingPayment?.metadata?.kind === requestKind &&
+            ((requestKind === 'wallet_topup' && !rowStatus.credited) ||
+              (requestKind === 'message_fee' && !rowStatus.fee_recorded));
         if (!canCarryOn) {
           log.info(`${FN}.terminal.idempotent`, { stage: 'transition', terminalReason: 'completed', source: 'pi_already_completed' });
           return respond({
@@ -443,40 +720,11 @@ Deno.serve(async (req) => {
       // server-computed expected price for the requested tier/fee.
       // Never trust client-supplied `amount` or `metadata.feePi` to
       // grant subscriptions or fee-gated messaging rights.
-      let verifiedPiAmount: number | null = null;
-      try {
-        const piGetResp = await fetch(`${piNetworkApiUrl}/${paymentRequest.paymentId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Key ${piApiKey}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (piGetResp.ok) {
-          const piPayment = await piGetResp.json();
-          const amt = Number(piPayment?.amount);
-          if (Number.isFinite(amt) && amt > 0) verifiedPiAmount = amt;
-        } else {
-          log.warn(`${FN}.pi_api.get_payment_failed`, {
-            stage: 'pi_api', status: piGetResp.status,
-          });
-        }
-      } catch (getErr) {
-        log.warn(`${FN}.pi_api.get_payment_exception`, {
-          stage: 'pi_api',
-          message: getErr instanceof Error ? getErr.message : String(getErr),
-        });
-      }
-
-      if (verifiedPiAmount == null) {
-        log.error(`${FN}.verify.amount_unavailable`, { stage: 'verify' });
-        return respond({
-          success: false,
-          message: 'Unable to verify payment amount',
-          paymentId: paymentRequest.paymentId,
-          txid: paymentRequest.txid,
-        }, 502);
-      }
+      // Also: the Pi account that paid must be the signed-in user's, before anything is credited,
+      // recorded or granted
+      const checked = await verifiedPayment(paymentRequest.txid);
+      if ('response' in checked) return checked.response;
+      const verifiedPiAmount = checked.amount;
 
       // An amount approved for a plan only buys that plan, whatever this request asks for. Otherwise
       // it could be credited as a top up, and the plan granted from the row on a retry as well
@@ -503,62 +751,7 @@ Deno.serve(async (req) => {
       // so the Pi-API-confirmed `verifiedPiAmount` is the only trustworthy
       // number to credit. Never trust `paymentRequest.amount` or metadata.
       if (paymentRequest.metadata?.kind === 'wallet_topup') {
-        const { data: newBalance, error: creditError } = await supabaseClient.rpc(
-          'credit_wallet_balance',
-          {
-            p_user_id: paymentRequest.userId,
-            p_amount_pi: verifiedPiAmount,
-            p_payment_id: paymentRequest.paymentId,
-            p_transaction_type: 'deposit',
-          },
-        );
-
-        if (creditError) {
-          log.error(`${FN}.wallet_topup.credit_failed`, {
-            stage: 'error',
-            message: creditError.message,
-          });
-          return respond({
-            success: false,
-            message: 'Payment completed but wallet credit failed. Please contact support.',
-            paymentId: paymentRequest.paymentId,
-            txid: paymentRequest.txid,
-          }, 500);
-        }
-
-        log.info(`${FN}.wallet_topup.credited`, {
-          stage: 'db_write',
-          amount: verifiedPiAmount,
-          newBalance,
-        });
-
-        try {
-          const notified = await notifyPaymentReceived(
-            supabaseClient,
-            paymentRequest.userId,
-            verifiedPiAmount,
-          );
-          if (!notified.success) throw new Error(notified.error);
-          log.info(`${FN}.notify.created`, { stage: 'notify' });
-        } catch (notifError) {
-          log.warn(`${FN}.notify.error`, {
-            stage: 'notify',
-            message: notifError instanceof Error ? notifError.message : String(notifError),
-          });
-        }
-
-        log.info(`${FN}.done`, {
-          stage: 'done',
-          terminalReason: 'completed',
-          durationMs: Date.now() - startTime,
-        });
-        return respond({
-          success: true,
-          message: 'Wallet credited successfully',
-          paymentId: paymentRequest.paymentId,
-          txid: paymentRequest.txid,
-          newBalance,
-        });
+        return await creditTopUp(paymentRequest.txid, verifiedPiAmount);
       }
 
       if (paymentRequest.metadata?.subscriptionTier) {
@@ -578,113 +771,55 @@ Deno.serve(async (req) => {
           // Payments approved before approved_amount_pi existed
           const expected = await getExpectedPlanPi(supabaseClient, tier, freq);
           if (!expected.ok && expected.error === 'invalid_tier') {
-            log.error(`${FN}.verify.unknown_tier`, { stage: 'verify', tier, freq });
+            log.error(`${FN}.verify.unknown_tier`, { stage: 'validation', tier, freq });
             return respond({ success: false, message: 'Invalid subscription tier' }, 400);
           }
           if (!expected.ok) {
-            log.error(`${FN}.verify.pi_price_unavailable`, { stage: 'verify' });
+            log.error(`${FN}.verify.pi_price_unavailable`, { stage: 'validation' });
             return respond({ success: false, message: 'Price service unavailable' }, 503);
           }
           const { expectedPi } = expected;
           if (verifiedPiAmount < expectedPi * AMOUNT_TOLERANCE) {
             log.error(`${FN}.verify.subscription_amount_mismatch`, {
-              stage: 'verify', tier, freq, expectedPi, verifiedPiAmount,
+              stage: 'validation', tier, freq, expectedPi, verifiedPiAmount,
             });
             return await refuseAmountAfterCompletion(paymentRequest.paymentId, paymentRequest.txid);
           }
         }
       }
 
+      // Told once per payment: not again when the fee was recorded or the plan granted before
+      let notify = true;
       if (paymentRequest.metadata?.kind === 'message_fee') {
-        const { data: feeSetting, error: feeSettingErr } = await supabaseClient
-          .from('platform_settings')
-          .select('value')
-          .eq('key', 'unverified_message_fee_pi')
-          .maybeSingle();
-        const expectedFeePi = Number(feeSetting?.value ?? 0.5);
-        if (feeSettingErr || !Number.isFinite(expectedFeePi) || expectedFeePi <= 0) {
-          log.error(`${FN}.verify.fee_setting_unavailable`, { stage: 'verify' });
-          return respond({ success: false, message: 'Fee setting unavailable' }, 503);
-        }
-        if (verifiedPiAmount < expectedFeePi * AMOUNT_TOLERANCE) {
-          log.error(`${FN}.verify.message_fee_amount_mismatch`, {
-            stage: 'verify', expectedFeePi, verifiedPiAmount,
-          });
-          return await refuseAmountAfterCompletion(paymentRequest.paymentId, paymentRequest.txid);
-        }
-        // Pin fee to the server-side expected value to prevent forged metadata.
-        (paymentRequest.metadata as any).feePi = expectedFeePi;
+        const fee = await recordMessageFee(paymentRequest.txid, verifiedPiAmount, paymentRequest.metadata);
+        if ('response' in fee) return fee.response;
+        notify = fee.recordedNow;
       }
-
-      if (paymentRequest.metadata?.kind === 'message_fee') {
-        try {
-          const md = paymentRequest.metadata as any;
-          let feeUsd = 0;
-          try {
-            const { data: priceRow } = await supabaseClient
-              .from('pi_price').select('price_usd').limit(1).maybeSingle();
-            feeUsd = Number(priceRow?.price_usd ?? 0) * Number(md.feePi ?? paymentRequest.amount);
-          } catch (_) { /* non-fatal */ }
-          // Idempotent insert: payment_id is UNIQUE, so a duplicate
-          // completion callback for the same Pi payment cannot create
-          // two fee rows. ignoreDuplicates avoids overwriting a row
-          // that may already have message_id attached.
-          const { error: feeError } = await supabaseClient
-            .from('message_fees')
-            .upsert({
-              conversation_id: md.conversationId,
-              sender_id: paymentRequest.userId,
-              business_id: md.businessId,
-              fee_pi: md.feePi ?? paymentRequest.amount,
-              fee_usd: feeUsd,
-              payment_id: paymentRequest.paymentId,
-              platform_share_pi: md.feePi ?? paymentRequest.amount,
-              business_share_pi: 0,
-              status: 'paid',
-            }, { onConflict: 'payment_id', ignoreDuplicates: true });
-          if (feeError) {
-            log.warn(`${FN}.message_fee.insert_error`, {
-              stage: 'db_write', message: feeError.message,
-            });
-          } else {
-            log.info(`${FN}.message_fee.recorded`, {
-              stage: 'db_write', conversationId: md.conversationId,
-            });
-          }
-        } catch (feeErr) {
-          log.error(`${FN}.message_fee.exception`, {
-            stage: 'error',
-            message: feeErr instanceof Error ? feeErr.message : String(feeErr),
-          });
-        }
-      }
-
 
       if (paymentRequest.metadata?.subscriptionTier) {
-        const failure = await activatePlan(
+        const plan = await activatePlan(
           paymentRequest.paymentId,
           paymentRequest.txid,
           paymentRequest.userId,
           paymentRequest.metadata.subscriptionTier,
           paymentRequest.metadata.frequency === 'annual' ? 'annual' : 'monthly',
         );
-        if (failure) return failure;
+        if ('failure' in plan) return plan.failure;
+        notify = plan.granted;
       }
 
-      try {
+      if (notify) {
         const notified = await notifyPaymentReceived(
           supabaseClient,
           paymentRequest.userId,
           paymentRequest.amount,
           paymentRequest.metadata?.subscriptionTier
         );
-        if (!notified.success) throw new Error(notified.error);
-        log.info(`${FN}.notify.created`, { stage: 'notify' });
-      } catch (notifError) {
-        log.warn(`${FN}.notify.error`, {
-          stage: 'notify',
-          message: notifError instanceof Error ? notifError.message : String(notifError),
-        });
+        if (notified.success) {
+          log.info(`${FN}.notify.created`, { stage: 'notify' });
+        } else {
+          log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+        }
       }
 
       log.info(`${FN}.done`, {
