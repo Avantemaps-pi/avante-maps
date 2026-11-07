@@ -183,3 +183,49 @@ drop trigger if exists trg_notify_new_review on public.reviews;
 create trigger trg_notify_new_review
   after insert on public.reviews
   for each row execute function public.notify_new_review();
+
+-- 4. Verified / certified: the same content as before, now with the kind, action and link, and
+--    wrapped so a failed notification can't undo the verification itself
+
+create or replace function public.notify_business_status_change()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+begin
+  if (old.is_verified = false or old.is_verified is null) and new.is_verified = true then
+    begin
+      perform public.create_notification(
+        new.owner_id,
+        'verification',
+        'verified',
+        'Congratulations! Your business "' || new.business_name || '" has been verified. You now have a verified badge.',
+        jsonb_build_object('businessId', new.id, 'businessName', new.business_name, 'status', 'verified', 'actionLabel', 'View verification'),
+        '/registered-business',
+        'high'
+      );
+    exception when others then
+      raise warning 'notify_business_status_change: verified notification for business % failed: %', new.id, sqlerrm;
+    end;
+  end if;
+
+  if (old.is_certified = false or old.is_certified is null) and new.is_certified = true then
+    begin
+      perform public.create_notification(
+        new.owner_id,
+        'certification',
+        'certified',
+        'Amazing! Your business "' || new.business_name || '" has been certified. You now have a certified badge!',
+        jsonb_build_object('businessId', new.id, 'businessName', new.business_name, 'status', 'certified', 'actionLabel', 'View verification'),
+        '/registered-business',
+        'high'
+      );
+    exception when others then
+      raise warning 'notify_business_status_change: certified notification for business % failed: %', new.id, sqlerrm;
+    end;
+  end if;
+
+  return new;
+end;
+$function$;
