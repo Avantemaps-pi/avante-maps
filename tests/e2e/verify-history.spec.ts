@@ -49,6 +49,11 @@ async function setup(page: Page, opts: { businesses?: object[]; replies?: object
     if ((req.headers()['accept'] ?? '').includes('vnd.pgrst.object')) {
       return route.fulfill({ json: { contact_info: { email: 'hello@harbour.example' }, contact_email_verified_for: null } });
     }
+    // The unread-messages count asks for the owner's business ids on every page (#161). It isn't
+    // the Bot's business load, so it never uses up a failure
+    if (new URL(req.url()).searchParams.get('select') === 'id') {
+      return route.fulfill({ json: (opts.businesses ?? [HARBOUR]).map((b) => ({ id: (b as { id: number }).id })) });
+    }
     if (businessLoadFailures > 0) {
       businessLoadFailures -= 1;
       return route.fulfill({ status: 500, json: { message: 'boom' } });
