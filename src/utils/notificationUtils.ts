@@ -45,6 +45,21 @@ export const markNotificationAsRead = async (id: string): Promise<void> => {
   }
 };
 
+// Records that the notification's action was opened (clicked_at and click_url, by track-notification)
+export const trackNotificationClick = async (id: string, clickUrl: string): Promise<void> => {
+  try {
+    await supabase.functions.invoke('track-notification', {
+      body: {
+        notification_id: id,
+        event_type: 'clicked',
+        click_url: clickUrl
+      }
+    });
+  } catch (trackError) {
+    console.error('Error tracking notification click:', trackError);
+  }
+};
+
 // Helper function to mark all notifications as read
 export const markAllNotificationsAsRead = async (): Promise<void> => {
   const { data: { user } } = await supabase.auth.getUser();
@@ -98,7 +113,7 @@ export const getAllNotifications = async (): Promise<NotificationProps[]> => {
 
   const { data, error } = await supabase
     .from('notifications')
-    .select('id, type, content, read, metadata, created_at, priority')
+    .select('id, type, content, read, metadata, created_at, priority, click_url')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false });
   
@@ -115,7 +130,8 @@ export const getAllNotifications = async (): Promise<NotificationProps[]> => {
     read: notification.read,
     metadata: notification.metadata as NotificationMetadata,
     created_at: notification.created_at,
-    priority: (notification.priority || 'medium') as NotificationPriority
+    priority: (notification.priority || 'medium') as NotificationPriority,
+    click_url: notification.click_url
   }));
 };
 

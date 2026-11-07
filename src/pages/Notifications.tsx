@@ -1,25 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import AppLayout from '@/components/layout/AppLayout';
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import PullToRefresh from 'react-simple-pull-to-refresh';
 import { supabase } from '@/integrations/supabase/client';
 import { 
   getAllNotifications, 
   markNotificationAsRead, 
-  markAllNotificationsAsRead, 
   markMultipleNotificationsAsRead,
   markMultipleNotificationsAsUnread,
-  notificationUpdateEvent 
+  notificationUpdateEvent,
+  trackNotificationClick
 } from '@/utils/notificationUtils';
 import { NotificationProps } from '@/types/notification';
 import NotificationItem from '@/components/notifications/NotificationItem';
 import EmptyNotifications from '@/components/notifications/EmptyNotifications';
 import NotificationCategoryTabs from '@/components/notifications/NotificationCategoryTabs';
 import BulkActionsBar from '@/components/notifications/BulkActionsBar';
-import { NotificationCategory, getNotificationsByCategory, getAllCategoryCounts } from '@/utils/notificationCategories';
-import { CheckSquare, RefreshCw } from 'lucide-react';
+import { NotificationCategory, getNotificationsByCategory } from '@/utils/notificationCategories';
+import { RefreshCw } from 'lucide-react';
+
+// Today (by the device's date) or earlier; a row just received has no created_at yet: today
+const isToday = (createdAt?: string) => {
+  if (!createdAt) return true;
+  return new Date(createdAt).toDateString() === new Date().toDateString();
+};
 
 const Notifications = () => {
   const [notifications, setNotifications] = useState<NotificationProps[]>([]);
@@ -63,7 +67,9 @@ const Notifications = () => {
               time: 'Just now',
               read: payload.new['read'],
               metadata: payload.new['metadata'],
-              priority: payload.new['priority'] || 'medium'
+              priority: payload.new['priority'] || 'medium',
+              created_at: payload.new['created_at'],
+              click_url: payload.new['click_url'] ?? null
             };
 
             // Add to new notification IDs for animation
@@ -108,8 +114,17 @@ const Notifications = () => {
     window.dispatchEvent(notificationUpdateEvent);
   };
   
+  const openNotification = (id: string, url: string) => {
+    void trackNotificationClick(id, url);
+  };
+
+  // The current tab's unread rows only
   const markAllAsRead = async () => {
-    await markAllNotificationsAsRead();
+    const ids = getNotificationsByCategory(notifications, activeCategory)
+      .filter(notification => !notification.read)
+      .map(notification => notification.id);
+    if (ids.length === 0) return;
+    await markMultipleNotificationsAsRead(ids);
     await loadNotifications();
     toast.success('All notifications marked as read', { id: 'notif:mark-all-read', duration: 4000 });
     window.dispatchEvent(notificationUpdateEvent);
@@ -167,21 +182,43 @@ const Notifications = () => {
   };
 
   const filteredNotifications = getNotificationsByCategory(notifications, activeCategory);
-  const categoryCounts = getAllCategoryCounts(notifications);
   const unreadCount = filteredNotifications.filter(notification => !notification.read).length;
+  // Newest first, then grouped
+  const sorted = [...filteredNotifications].sort((a, b) =>
+    (b.created_at ?? '\uffff').localeCompare(a.created_at ?? '\uffff')
+  );
+  const groups = [
+    { label: 'Today', items: sorted.filter(notification => isToday(notification.created_at)) },
+    { label: 'Earlier', items: sorted.filter(notification => !isToday(notification.created_at)) },
+  ].filter(group => group.items.length > 0);
+
+  const renderRow = (notification: NotificationProps) => (
+    <div
+      key={notification.id}
+      className={newNotificationIds.has(notification.id) ? 'animate-fade-in' : ''}
+    >
+      <NotificationItem
+        notification={notification}
+        onReadNotification={markAsRead}
+        onOpenNotification={openNotification}
+        isSelected={selectedIds.has(notification.id)}
+        onToggleSelection={toggleSelection}
+        selectionMode={selectionMode}
+      />
+    </div>
+  );
+
   return (
-    <AppLayout title="Avante Maps">
-      <div className="max-w-3xl mx-auto mt-2 space-y-2">
-        {/* Category Tabs */}
-        <div className="px-3">
+    <AppLayout title="Notifications">
+      <div className="max-w-3xl mx-auto">
+        {/* All · Account · Activity */}
+        <div className="px-3 py-2 border-b border-border">
           <NotificationCategoryTabs
             activeCategory={activeCategory}
             onCategoryChange={setActiveCategory}
-            categoryCounts={categoryCounts}
           />
         </div>
 
-        
         {/* Notifications list with pull-to-refresh */}
         <PullToRefresh
           onRefresh={handleRefresh}
@@ -199,30 +236,29 @@ const Notifications = () => {
           maxPullDownDistance={100}
           resistance={2}
         >
-          <Card>
-            <CardContent className="p-0">
-              <div className="divide-y">
-                {filteredNotifications.length > 0 ? (
-                  filteredNotifications.map(notification => (
-                    <div
-                      key={notification.id}
-                      className={newNotificationIds.has(notification.id) ? 'animate-fade-in' : ''}
-                    >
-                      <NotificationItem 
-                        notification={notification} 
-                        onReadNotification={markAsRead}
-                        isSelected={selectedIds.has(notification.id)}
-                        onToggleSelection={toggleSelection}
-                        selectionMode={selectionMode}
-                      />
-                    </div>
-                  ))
-                ) : (
-                  <EmptyNotifications />
-                )}
-              </div>
-            </CardContent>
-          </Card>
+          <div>
+            {groups.length > 0 ? (
+              groups.map((group, index) => (
+                <section key={group.label} aria-label={group.label}>
+                  <div className={`flex items-center justify-between px-4 ${index === 0 ? 'pt-1' : 'pt-3'}`}>
+                    <h2 className="py-3 text-[13px] font-semibold text-muted-foreground">{group.label}</h2>
+                    {index === 0 && unreadCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={markAllAsRead}
+                        className="min-h-11 text-sm font-semibold text-primary hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+                      >
+                        Mark all as read
+                      </button>
+                    )}
+                  </div>
+                  {group.items.map(renderRow)}
+                </section>
+              ))
+            ) : (
+              <EmptyNotifications category={activeCategory} />
+            )}
+          </div>
         </PullToRefresh>
 
         {/* Bulk actions bar */}

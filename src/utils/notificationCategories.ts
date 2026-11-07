@@ -1,4 +1,5 @@
 import { NotificationProps, NotificationType } from '@/types/notification';
+import { isActivityNotification } from './notificationKinds';
 
 export type NotificationCategory = 'all' | 'account' | 'activity';
 
@@ -28,10 +29,11 @@ export const getNotificationsByCategory = (
   const filteredNotifications = notifications.filter(n => n.type !== 'bookmark');
   
   if (category === 'all') return filteredNotifications;
-  
-  const categoryTypes = categoryConfig[category].types;
-  return filteredNotifications.filter(notification => 
-    categoryTypes.includes(notification.type)
+
+  // By kind: Activity is messages and reviews, Account is everything about the user's businesses,
+  // plan and payments
+  return filteredNotifications.filter(notification =>
+    category === 'activity' ? isActivityNotification(notification) : !isActivityNotification(notification)
   );
 };
 

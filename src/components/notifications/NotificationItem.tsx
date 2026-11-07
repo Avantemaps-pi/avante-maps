@@ -1,32 +1,79 @@
 import React, { useState, useRef } from 'react';
-import { Bell, MessageSquare, Star, Store, Users, ThumbsUp, ShieldCheck, Shield, Coins, Bookmark, AlertCircle, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { NotificationProps } from '@/types/notification';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useSwipeable } from 'react-swipeable';
+import { Link, useNavigate } from '@/lib/router-compat';
 import { cn } from '@/lib/utils';
-import PriorityIndicator from './PriorityIndicator';
+import {
+  getKindConfig,
+  getNotificationAction,
+  getNotificationKind,
+  getNotificationName,
+  wasAlsoEmailed,
+  type NotificationTint,
+} from '@/utils/notificationKinds';
 
 interface NotificationItemProps {
   notification: NotificationProps;
   onReadNotification: (id: string) => void;
+  /** The row or its action was opened: records the click (clicked_at) */
+  onOpenNotification?: (id: string, url: string) => void;
   isSelected?: boolean;
   onToggleSelection?: (id: string) => void;
   selectionMode?: boolean;
 }
 
-const NotificationItem: React.FC<NotificationItemProps> = ({ 
-  notification, 
+const TINTS: Record<NotificationTint, string> = {
+  primary: 'bg-accent text-primary',
+  muted: 'bg-muted text-muted-foreground',
+  destructive: 'bg-destructive/15 text-destructive',
+};
+
+// click_url is an in-app path; anything else opens as a normal link
+const isInAppPath = (url: string) => url.startsWith('/') && !url.startsWith('//');
+
+// The text, with the person or business name in bold where it appears (or before it)
+const NotificationText = ({ content, name }: { content: string; name: string | null }) => {
+  if (!name) return <>{content}</>;
+  const at = content.indexOf(name);
+  if (at === -1) {
+    return (
+      <>
+        <strong className="font-semibold">{name}</strong> {content}
+      </>
+    );
+  }
+  return (
+    <>
+      {content.slice(0, at)}
+      <strong className="font-semibold">{name}</strong>
+      {content.slice(at + name.length)}
+    </>
+  );
+};
+
+const NotificationItem: React.FC<NotificationItemProps> = ({
+  notification,
   onReadNotification,
+  onOpenNotification,
   isSelected = false,
   onToggleSelection,
   selectionMode = false
 }) => {
-  const { type, content, time, read, id } = notification;
+  const { content, time, read, id } = notification;
+  const navigate = useNavigate();
   const [swipeOffset, setSwipeOffset] = useState(0);
   const [isSwiping, setIsSwiping] = useState(false);
   const hasVibratedRef = useRef(false);
 
   const SWIPE_THRESHOLD = 80;
+
+  const kind = getNotificationKind(notification);
+  const { icon: Icon, tint } = getKindConfig(kind);
+  const name = getNotificationName(notification);
+  const action = getNotificationAction(notification);
+  const emailed = wasAlsoEmailed(notification);
 
   const triggerHapticFeedback = () => {
     if ('vibrate' in navigator && !hasVibratedRef.current) {
@@ -34,52 +81,42 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
       hasVibratedRef.current = true;
     }
   };
-  
-  const getIcon = () => {
-    switch (type) {
-      case 'message':
-        return <MessageSquare className="h-4 w-4" />;
-      case 'review':
-        return <Star className="h-4 w-4" />;
-      case 'business':
-        return <Store className="h-4 w-4" />;
-      case 'follower':
-        return <Users className="h-4 w-4" />;
-      case 'like':
-        return <ThumbsUp className="h-4 w-4" />;
-      case 'verification':
-        return <ShieldCheck className="h-4 w-4" />;
-      case 'certification':
-        return <Shield className="h-4 w-4" />;
-      case 'payment':
-        return <Coins className="h-4 w-4" />;
-      case 'bookmark':
-        return <Bookmark className="h-4 w-4" />;
-      case 'system':
-        return <AlertCircle className="h-4 w-4" />;
-      default:
-        return <Bell className="h-4 w-4" />;
-    }
-  };
 
-  // Every type shares one colour; the icon shape tells the types apart.
-  const getIconColor = () =>
-    read ? 'text-muted-foreground bg-muted' : 'text-primary bg-accent';
+  // Opening marks it read and records the click
+  const recordOpen = () => {
+    if (!read) onReadNotification(id);
+    if (action) onOpenNotification?.(id, action.url);
+  };
 
   const handleClick = () => {
     if (isSwiping) return;
-    
+
     if (selectionMode && onToggleSelection) {
-      onToggleSelection(notification.id);
-    } else if (!notification.read) {
-      onReadNotification(notification.id);
+      onToggleSelection(id);
+      return;
     }
+    recordOpen();
+    if (action) {
+      if (isInAppPath(action.url)) navigate(action.url);
+      else window.location.assign(action.url);
+    }
+  };
+
+  const handleActionClick = (e: React.MouseEvent) => {
+    // The link navigates by itself; the row's click would do it twice
+    e.stopPropagation();
+    if (selectionMode) {
+      e.preventDefault();
+      onToggleSelection?.(id);
+      return;
+    }
+    recordOpen();
   };
 
   const handleCheckboxChange = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onToggleSelection) {
-      onToggleSelection(notification.id);
+      onToggleSelection(id);
     }
   };
 
@@ -87,7 +124,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     onSwiping: (eventData) => {
       if (selectionMode) return;
       setIsSwiping(true);
-      
+
       // Only allow right swipe (positive deltaX) for mark as read
       const offset = Math.max(0, Math.min(120, eventData.deltaX));
       setSwipeOffset(offset);
@@ -107,9 +144,9 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
 
       // Swipe right - mark as read
       if (eventData.deltaX > SWIPE_THRESHOLD && !read) {
-        onReadNotification(notification.id);
+        onReadNotification(id);
       }
-      
+
       // Reset
       setTimeout(() => {
         setSwipeOffset(0);
@@ -123,16 +160,20 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   });
 
   const showMarkAsReadAction = swipeOffset > SWIPE_THRESHOLD && !read;
+  const actionClassName =
+    'self-start inline-flex min-h-11 items-center text-sm font-semibold text-primary hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring rounded-sm';
 
   return (
-    <div 
+    <div
+      data-notification-row={kind}
+      data-unread={read ? undefined : 'true'}
       className={cn(
         "relative overflow-hidden border-b border-border",
         isSelected && "bg-accent/60"
       )}
     >
       {/* Left action - Mark as read */}
-      <div 
+      <div
         className={cn(
           "absolute left-0 top-0 bottom-0 w-24 flex items-center justify-center bg-primary transition-opacity",
           showMarkAsReadAction ? "opacity-100" : "opacity-0"
@@ -141,40 +182,61 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
         <Check className="h-6 w-6 text-primary-foreground" />
       </div>
 
-      {/* Main content */}
+      {/* Main content: opaque, so the swipe action only shows when it's pulled aside */}
       <div
         {...handlers}
         style={{
           transform: `translateX(${swipeOffset}px)`,
           transition: isSwiping ? 'none' : 'transform 0.2s ease-out'
         }}
-        className={cn(
-          "p-3 flex items-start cursor-pointer hover:bg-accent/50 transition-colors bg-background",
-          read ? "" : "bg-accent/30"
-        )}
+        className="relative bg-background cursor-pointer"
         onClick={handleClick}
       >
-        {selectionMode && (
-          <div className="mr-3 mt-1" onClick={handleCheckboxChange}>
-            <Checkbox checked={isSelected} />
+        <div
+          className={cn(
+            "flex items-start gap-3 px-4 py-3 transition-colors",
+            read ? "hover:bg-muted/50" : "bg-accent/40 dark:bg-primary/[0.08]"
+          )}
+        >
+          {selectionMode && (
+            <div className="mt-2" onClick={handleCheckboxChange}>
+              <Checkbox checked={isSelected} />
+            </div>
+          )}
+
+          <span
+            data-tint={tint}
+            className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-full", TINTS[tint])}
+          >
+            <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
+          </span>
+
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <p className="text-sm leading-5 text-foreground break-words">
+              <NotificationText content={content} name={name} />
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {time}
+              {emailed && <span> · Also emailed</span>}
+            </p>
+            {action &&
+              (isInAppPath(action.url) ? (
+                <Link to={action.url} onClick={handleActionClick} className={actionClassName}>
+                  {action.label}
+                </Link>
+              ) : (
+                <a href={action.url} onClick={handleActionClick} className={actionClassName}>
+                  {action.label}
+                </a>
+              ))}
           </div>
-        )}
-        
-      <div className={`p-1.5 rounded-full mr-3 ${getIconColor()}`}>
-          {getIcon()}
+
+          {!read && !selectionMode && (
+            <span data-unread-dot className="relative mt-2 h-2 w-2 shrink-0 rounded-full bg-primary">
+              <span className="sr-only">Unread</span>
+            </span>
+          )}
         </div>
-        
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <p className={`text-sm ${read ? 'text-muted-foreground' : 'font-medium text-foreground'}`}>{content}</p>
-            <PriorityIndicator priority={notification.priority} variant="dot" />
-          </div>
-          <p className="text-xs text-muted-foreground mt-0.5">{time}</p>
-        </div>
-        
-        {!read && !selectionMode && (
-          <div className="ml-2 h-2 w-2 rounded-full bg-primary"></div>
-        )}
       </div>
     </div>
   );
