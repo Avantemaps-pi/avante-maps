@@ -11,7 +11,7 @@ const Wallet = () => {
   const { balance, isLoading, isError, refetch } = useWalletBalance();
   const queryClient = useQueryClient();
 
-  const handleTopUpSuccess = () => {
+  const handleTopUpDone = () => {
     void refetch();
     void queryClient.invalidateQueries({ queryKey: [WALLET_ACTIVITY_QUERY_KEY] });
   };
@@ -20,7 +20,7 @@ const Wallet = () => {
     <AppLayout title="Wallet" fullWidth={true} className="overflow-x-hidden">
       <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 pt-3 sm:pt-4 pb-4 sm:pb-6" role="region" aria-labelledby="page-title">
         <BalanceCard balance={balance} isLoading={isLoading} isError={isError} />
-        <TopUpDialog onSuccess={handleTopUpSuccess} />
+        <TopUpDialog onDone={handleTopUpDone} />
         <WalletAddresses />
         <PaymentHistory />
       </div>
