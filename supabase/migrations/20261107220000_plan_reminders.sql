@@ -49,3 +49,54 @@ select cron.schedule(
   ) as request_id;
   $$
 );
+
+-- New review notifications: owners can't reply to reviews, so the action is "See review", and the
+-- link opens the business's View Reviews tab. The same function as in
+-- 20261107180000_notification_events.sql apart from those two values.
+
+create or replace function public.notify_new_review()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $f$
+declare
+  v_owner uuid;
+  v_name text;
+  v_text text := nullif(trim(coalesce(new.content, '')), '');
+begin
+  begin
+    select owner_id, business_name into v_owner, v_name from public.businesses where id = new.business_id;
+    if v_owner is null or v_owner = new.user_id then
+      return new;
+    end if;
+    perform public.create_notification(
+      v_owner,
+      'review',
+      'new_review',
+      'New review for ' || v_name || ': ' || new.rating || '★'
+        || case
+             when v_text is null then ''
+             when length(v_text) > 120 then ' “' || rtrim(left(v_text, 120)) || '…”'
+             else ' “' || v_text || '”'
+           end,
+      jsonb_build_object('businessId', new.business_id, 'businessName', v_name, 'rating', new.rating,
+        'reviewId', new.id, 'actionLabel', 'See review'),
+      '/review/' || new.business_id || '?tab=reviews',
+      'medium'
+    );
+  exception when others then
+    raise warning 'notify_new_review: notification for review % failed: %', new.id, sqlerrm;
+  end;
+  return new;
+end
+$f$;
+
+revoke all on function public.notify_new_review() from public, anon, authenticated;
+
+-- The new_review notifications already sent get the same action and link
+update public.notifications
+  set click_url = '/review/' || (metadata->>'businessId') || '?tab=reviews',
+      metadata = metadata || '{"actionLabel": "See review"}'::jsonb
+  where metadata->>'kind' = 'new_review'
+    and metadata->>'businessId' is not null;

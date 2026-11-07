@@ -35,7 +35,11 @@ const Review = () => {
   const [business, setBusiness] = useState<Place | null>(null);
   const [businessLoading, setBusinessLoading] = useState(true);
   const [existingReviewLoaded, setExistingReviewLoaded] = useState(false);
-  const [activeTab, setActiveTab] = useState('review');
+  // ?tab=reviews (the new-review notification's link) opens on View Reviews. Left in the URL, so
+  // Back and a reload keep the tab
+  const [activeTab, setActiveTab] = useState(() =>
+    new URLSearchParams(location.search.replace(/^\?+/, '')).get('tab') === 'reviews' ? 'reviews' : 'review'
+  );
   const reviewStats = useReviewStats();
   const [showLogin, setShowLogin] = useState(false);
   // AuthProvider restores a cached sign-in after hydration, so on a direct
