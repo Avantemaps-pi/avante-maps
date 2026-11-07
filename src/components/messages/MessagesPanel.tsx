@@ -143,7 +143,14 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
     loadingMsgs,
     openConversation,
     sendMessage,
+    customerNames,
   } = useMessages(inbox);
+
+  // Business inbox: "@username" once known, else the start of the customer's id
+  const customerLabel = (c: { id: string; customer_id: string }) => {
+    const name = customerNames[c.id];
+    return name ? `@${name}` : `Customer ${c.customer_id.slice(0, 6)}`;
+  };
 
   // Auto-open initial conversation once, after this inbox's conversation list has loaded
   // (before that, an empty list doesn't mean the conversation is missing).
@@ -309,7 +316,7 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
                           <div className="flex items-baseline justify-between gap-2">
                             <p className="text-base font-semibold text-foreground truncate">
                               {isBusinessInbox
-                                ? `Customer ${c.customer_id.slice(0, 6)}`
+                                ? customerLabel(c)
                                 : c.business_name ?? 'Business no longer listed'}
                             </p>
                             <span className="text-xs text-muted-foreground flex-shrink-0">
@@ -373,7 +380,7 @@ const MessagesPanel: React.FC<MessagesPanelProps> = ({
             </Button>
             <p className="text-base font-semibold text-foreground truncate">
               {isBusinessInbox
-                ? `Customer ${activeConv?.customer_id.slice(0, 6) ?? ''}`
+                ? activeConv ? customerLabel(activeConv) : 'Customer'
                 : activeConv?.business_name ?? 'Conversation'}
             </p>
           </div>
