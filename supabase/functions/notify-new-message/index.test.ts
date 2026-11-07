@@ -17,6 +17,7 @@ const handler = await loadHandler(new URL('./index.ts', import.meta.url).href);
 
 const SECRET = 'test-cron-secret';
 const CONVERSATION = '11111111-1111-4111-8111-111111111111';
+const OWNER = '00000000-0000-0000-0000-0000000000b1';
 const CUSTOMER = '00000000-0000-0000-0000-0000000000c1';
 const EMAIL = 'hello@harbour.example';
 const MSG = (n: number) =>
@@ -41,6 +42,7 @@ function setup(options: Options = {}) {
   const sent: { to: string; subject: string; html: string }[] = [];
   const business: Row = {
     id: 7,
+    owner_id: OWNER,
     business_name: 'Harbour <Light> & Co',
     contact_info: { email: ' Hello@Harbour.example' },
     contact_email_verified_for: EMAIL,
@@ -69,6 +71,7 @@ function setup(options: Options = {}) {
       messages,
       users: [{ id: CUSTOMER, username: 'pi_<pioneer>' }],
       message_email_log: options.log ?? [],
+      notifications: [],
     },
     users: {},
     primaryKeys: { message_email_log: 'conversation_id' },
@@ -90,7 +93,14 @@ function setup(options: Options = {}) {
         : Response.json({ messageId: 'm1' });
     },
   });
-  return { fake, sent, business, conversation, messages };
+  return {
+    fake,
+    sent,
+    business,
+    conversation,
+    messages,
+    notifications: () => fake.tables.notifications!,
+  };
 }
 
 // Everything the function logs, to check no email address or message text leaks into it
@@ -159,7 +169,11 @@ test("a business's message is not emailed", () =>
     async ({ sent }) => {
       const res = await call(MSG(1));
       assertEquals(res.status, 200);
-      assertEquals(res.body, { sent: false, reason: 'not_customer_message' });
+      assertEquals(res.body, {
+        sent: false,
+        notified: false,
+        reason: 'not_customer_message',
+      });
       assertEquals(sent, []);
     },
   ));
@@ -177,11 +191,11 @@ test('a customer message with a confirmed email: one email with the subject, the
         },
       ],
     },
-    async ({ sent, fake }) => {
+    async ({ sent, fake, notifications }) => {
       logged.length = 0;
       const res = await call(MSG(1));
       assertEquals(res.status, 200);
-      assertEquals(res.body, { sent: true });
+      assertEquals(res.body, { sent: true, notified: true });
       assertEquals(sent.length, 1);
       const email = sent[0]!;
       assertEquals(email.to, EMAIL);
@@ -215,6 +229,31 @@ test('a customer message with a confirmed email: one email with the subject, the
         "You're getting this because you own Harbour &lt;Light&gt; &amp; Co on Avante Maps.",
       );
 
+      // And the in-app notification, marked as emailed
+      assertEquals(notifications().length, 1);
+      const n = notifications()[0]!;
+      assertEquals(n.user_id, OWNER);
+      assertEquals(n.type, 'message');
+      assertEquals(n.click_url, `/communicon?conversation=${CONVERSATION}`);
+      assertEquals(
+        n.content,
+        `pi_<pioneer> messaged Harbour <Light> & Co: “${cut}”`,
+      );
+      assertEquals(n.metadata, {
+        kind: 'new_message',
+        businessId: 7,
+        businessName: 'Harbour <Light> & Co',
+        conversationId: CONVERSATION,
+        messageId: MSG(1),
+        actionLabel: 'Reply',
+        emailed: true,
+        userName: 'pi_<pioneer>',
+      });
+      assertEquals(
+        [n.read, n.priority, n.delivery_status],
+        [false, 'medium', 'delivered'],
+      );
+
       // The send is claimed in the log
       assertEquals(fake.tables.message_email_log!.length, 1);
       assertEquals(fake.tables.message_email_log![0]!.last_message_id, MSG(1));
@@ -230,10 +269,15 @@ test('a customer message with a confirmed email: one email with the subject, the
 });
 
 test("a second unread customer message isn't emailed (the owner hasn't read the first)", () =>
-  run({ businessUnread: 2, log: [] }, async ({ sent }) => {
+  run({ businessUnread: 2, log: [] }, async ({ sent, notifications }) => {
     const res = await call(MSG(1));
-    assertEquals(res.body, { sent: false, reason: 'earlier_message_unread' });
+    assertEquals(res.body, {
+      sent: false,
+      notified: false,
+      reason: 'earlier_message_unread',
+    });
     assertEquals(sent, []);
+    assertEquals(notifications(), []);
   }));
 
 test('after the owner has read the conversation, a new message is emailed', () =>
@@ -250,10 +294,11 @@ test('after the owner has read the conversation, a new message is emailed', () =
         },
       ],
     },
-    async ({ sent, fake }) => {
+    async ({ sent, fake, notifications }) => {
       const res = await call(MSG(1));
-      assertEquals(res.body, { sent: true });
+      assertEquals(res.body, { sent: true, notified: true });
       assertEquals(sent.length, 1);
+      assertEquals(notifications().length, 1);
       assertEquals(fake.tables.message_email_log![0]!.last_message_id, MSG(1));
     },
   ));
@@ -270,15 +315,20 @@ test('within 10 minutes of the last email, nothing is sent', () =>
         },
       ],
     },
-    async ({ sent, fake }) => {
+    async ({ sent, fake, notifications }) => {
       const res = await call(MSG(1));
-      assertEquals(res.body, { sent: false, reason: 'recently_emailed' });
+      assertEquals(res.body, {
+        sent: false,
+        notified: false,
+        reason: 'recently_emailed',
+      });
       assertEquals(sent, []);
+      assertEquals(notifications(), []);
       assertEquals(fake.tables.message_email_log![0]!.last_message_id, MSG(0));
     },
   ));
 
-test('opted out, inactive, unconfirmed or changed email: nothing is sent', async () => {
+test('opted out, inactive, unconfirmed or changed email: no email, but the in-app notification still goes', async () => {
   const cases: Array<[Row, string]> = [
     [{ notify_new_message_email: false }, 'opted_out'],
     [{ is_active: false }, 'business_inactive'],
@@ -287,22 +337,79 @@ test('opted out, inactive, unconfirmed or changed email: nothing is sent', async
     [{ contact_info: {} }, 'email_not_confirmed'],
   ];
   for (const [business, reason] of cases) {
-    await run({ business }, async ({ sent, fake }) => {
+    await run({ business }, async ({ sent, fake, notifications }) => {
       const res = await call(MSG(1));
-      assertEquals(res.body, { sent: false, reason }, JSON.stringify(business));
+      assertEquals(
+        res.body,
+        { sent: false, notified: true, reason },
+        JSON.stringify(business),
+      );
       assertEquals(sent, []);
-      assertEquals(fake.tables.message_email_log, []);
+      assertEquals(notifications().length, 1, JSON.stringify(business));
+      assertEquals(
+        (notifications()[0]!.metadata as Row).emailed,
+        false,
+        JSON.stringify(business),
+      );
+      // Claimed all the same, so the next message within 10 minutes adds nothing
+      assertEquals(fake.tables.message_email_log!.length, 1);
     });
   }
 });
 
+test('opted out: not twice within 10 minutes', () =>
+  run(
+    {
+      business: { notify_new_message_email: false },
+      messages: [
+        {
+          id: MSG(1),
+          conversation_id: CONVERSATION,
+          sender_role: 'customer',
+          body: 'First',
+        },
+        {
+          id: MSG(2),
+          conversation_id: CONVERSATION,
+          sender_role: 'customer',
+          body: 'Second',
+        },
+      ],
+    },
+    async ({ conversation, notifications }) => {
+      assertEquals((await call(MSG(1))).body.notified, true);
+      // The owner read it, so the next message is the first unread again, but within 10 minutes
+      conversation.business_unread = 1;
+      const again = await call(MSG(2));
+      assertEquals(again.body, {
+        sent: false,
+        notified: false,
+        reason: 'recently_emailed',
+      });
+      assertEquals(notifications().length, 1);
+    },
+  ));
+
 test('a Brevo failure is a 502 and releases the claim, so a later message can try again', () =>
-  run({ brevoOk: false }, async ({ sent, fake }) => {
+  run({ brevoOk: false }, async ({ sent, fake, notifications }) => {
     logged.length = 0;
     const res = await call(MSG(1));
     assertEquals(res.status, 502);
+    assertEquals(res.body, {
+      sent: false,
+      notified: true,
+      reason: 'email_failed',
+    });
     assertEquals(sent.length, 1);
     assertEquals(fake.tables.message_email_log, []);
+    // The in-app one went, not marked as emailed
+    assertEquals(notifications().length, 1);
+    assertEquals((notifications()[0]!.metadata as Row).emailed, false);
+    // A repeat of the same message tries the email again, but adds no second notification
+    const retry = await call(MSG(1));
+    assertEquals(retry.body.notified, false);
+    assertEquals(sent.length, 2);
+    assertEquals(notifications().length, 1);
     // Brevo's error body (which can echo the address) isn't logged
     assert(!logged.join('\n').toLowerCase().includes('harbour.example'));
   }));
@@ -326,9 +433,10 @@ test('a Brevo failure after a takeover releases it too', () =>
   ));
 
 test('two concurrent calls send one email', () =>
-  run({}, async ({ sent, fake }) => {
+  run({}, async ({ sent, fake, notifications }) => {
     const results = await Promise.all([call(MSG(1)), call(MSG(1))]);
     assertEquals(sent.length, 1);
+    assertEquals(notifications().length, 1);
     assertEquals(results.map((r) => r.body.sent).sort(), [false, true]);
     assertEquals(
       results.find((r) => !r.body.sent)!.body.reason,
@@ -340,6 +448,10 @@ test('two concurrent calls send one email', () =>
 test('an unknown message id sends nothing', () =>
   run({}, async ({ sent }) => {
     const res = await call(MSG(9));
-    assertEquals(res.body, { sent: false, reason: 'message_not_found' });
+    assertEquals(res.body, {
+      sent: false,
+      notified: false,
+      reason: 'message_not_found',
+    });
     assertEquals(sent, []);
   }));

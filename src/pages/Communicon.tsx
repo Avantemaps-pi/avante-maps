@@ -45,6 +45,13 @@ const readConversationLink = (search: string) => {
   return { present: params.has('conversation'), id: valid ? id : null };
 };
 
+// The "contact email changed" notification's link: ?confirm=1 opens the Bot tab on the contact
+// email confirmation (a code already sent, or else the verification check that sends one)
+const readConfirmRequest = (search: string) => {
+  const params = new URLSearchParams(search.replace(/^\?+/, ''));
+  return { present: params.has('confirm'), wanted: params.get('confirm') === '1' };
+};
+
 // The last tab the user picked in this visit (session)
 const TAB_STORAGE_KEY = 'communicon-tab';
 
@@ -125,7 +132,10 @@ const Communicon = () => {
       return;
     }
     const needsBot =
-      !!state?.triggerVerification || readConfirmLink(location.search).present || !!loadPendingContactCode();
+      !!state?.triggerVerification ||
+      readConfirmLink(location.search).present ||
+      readConfirmRequest(location.search).wanted ||
+      !!loadPendingContactCode();
     handleChatModeChange(needsBot ? 'ai' : (readRememberedTab() ?? 'live'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -146,7 +156,17 @@ const Communicon = () => {
   useEffect(() => {
     const { present, link } = readConfirmLink(location.search);
     const conversationLink = readConversationLink(location.search);
-    if (present || conversationLink.present) navigate(location.pathname, { replace: true, state: location.state });
+    const confirmRequest = readConfirmRequest(location.search);
+    // ?confirm=1 with no code to resume starts the verification check (its effect below)
+    const startCheck = confirmRequest.wanted && !link && !loadPendingContactCode();
+    if (present || conversationLink.present || confirmRequest.present) {
+      navigate(location.pathname, {
+        replace: true,
+        state: startCheck
+          ? { ...((location.state as Record<string, unknown> | null) ?? {}), triggerVerification: true, verificationType: 'verification' }
+          : location.state,
+      });
+    }
     if (conversationLink.id) setLinkConversation(conversationLink.id);
     else if (conversationLink.present) showConversationErrorToast('not_found');
     if (link) {

@@ -77,6 +77,14 @@ test('with approved_amount_pi: passes even if pi_price has moved a lot', async (
   assertEquals(rpcCalls.length, 1);
   assertEquals(rpcCalls[0]!['p_frequency'], 'monthly');
   assertEquals(notifications().length, 1);
+  // The same text as before, now with the kind, action and link
+  const n = notifications()[0]!;
+  assertEquals(n['content'], 'Payment of 65.19 Pi received successfully! Your small-business subscription is now active.');
+  assertEquals(n['click_url'], '/pricing');
+  assertEquals(n['type'], 'payment');
+  assertEquals((n['metadata'] as Row)['kind'], 'plan_paid');
+  assertEquals((n['metadata'] as Row)['actionLabel'], 'View plan');
+  assertEquals((n['metadata'] as Row)['tier'], 'small-business');
   fake.restore();
 });
 
@@ -124,7 +132,7 @@ test('annual is recorded as annual', async () => {
   fake.restore();
 });
 
-test('the plan fails to activate: 500 plan_not_activated, no success, no notification', async () => {
+test('the plan fails to activate: 500 plan_not_activated, no success, and one plan_not_activated notification', async () => {
   const { fake, row, notifications } = setup({ rpcError: 'No completed payment found' });
   const { status, json } = await call();
   assertEquals(status, 500);
@@ -132,7 +140,16 @@ test('the plan fails to activate: 500 plan_not_activated, no success, no notific
   assertEquals(json.error_code, 'plan_not_activated');
   assertEquals(json.message, 'Payment received, but your plan could not be activated. Please contact support.');
   assert(!JSON.stringify(json).includes('No completed payment'));
-  assertEquals(notifications().length, 0);
+  assertEquals(notifications().length, 1);
+  const n = notifications()[0]!;
+  assertEquals(n['user_id'], OWNER);
+  assertEquals(n['type'], 'payment');
+  assertEquals(n['priority'], 'high');
+  assertEquals(n['content'], "Payment received for the Small Business plan, but your plan isn't active yet. Contact support and we'll sort it out.");
+  assertEquals(n['click_url'], '/contact');
+  assertEquals((n['metadata'] as Row)['kind'], 'plan_not_activated');
+  assertEquals((n['metadata'] as Row)['actionLabel'], 'Contact support');
+  assert(!String(n['content']).includes('No completed payment'), 'not the database error');
   // Not cancelled: the Pi has moved
   assertEquals(row()!['status'], { approved: true, verified: true, completed: true, cancelled: false, error: 'plan_not_activated' });
   fake.restore();
@@ -144,7 +161,9 @@ test('a retry after that does not report success', async () => {
   const retry = await call();
   assertEquals([retry.status, retry.json.success, retry.json.error_code], [500, false, 'plan_not_activated']);
   assertEquals(rpcCalls.length, 1);
-  assertEquals(notifications().length, 0);
+  // Told once, when it happened: the retry adds nothing
+  assertEquals(notifications().length, 1);
+  assertEquals((notifications()[0]!['metadata'] as Row)['kind'], 'plan_not_activated');
   fake.restore();
 });
 
@@ -157,7 +176,7 @@ test('a retry after a success still reports success, without granting twice', as
   fake.restore();
 });
 
-test('a top-up: unchanged, credited with no plan', async () => {
+test('a top-up: unchanged, credited with no plan, and a topup_received notification', async () => {
   const fake = installFakeSupabase({
     tables: { payments: [approvedRow({ metadata: { kind: 'wallet_topup' }, approved_amount_pi: null })], notifications: [] },
     users: { 'owner-token': OWNER },
@@ -170,6 +189,12 @@ test('a top-up: unchanged, credited with no plan', async () => {
   });
   const { status, json } = await call({ kind: 'wallet_topup' });
   assertEquals([status, json.success, json.newBalance], [200, true, 3]);
+  const notes = fake.tables['notifications']!;
+  assertEquals(notes.length, 1);
+  assertEquals(notes[0]!['content'], 'Payment of 3 Pi received successfully!');
+  assertEquals(notes[0]!['click_url'], '/wallet');
+  assertEquals((notes[0]!['metadata'] as Row)['kind'], 'topup_received');
+  assertEquals((notes[0]!['metadata'] as Row)['actionLabel'], 'Open wallet');
   fake.restore();
 });
 
@@ -330,11 +355,12 @@ test('a completed plan row with no plan_activated and no error: granted once, fr
 });
 
 test('the same, if the grant fails: plan_not_activated, and a retry gets it too', async () => {
-  const { fake, rpcCalls, row } = setup({ rpcError: 'boom', rows: [approvedRow({ status: COMPLETED, txid: TXID })] });
+  const { fake, rpcCalls, row, notifications } = setup({ rpcError: 'boom', rows: [approvedRow({ status: COMPLETED, txid: TXID })] });
   assertEquals((await call()).json.error_code, 'plan_not_activated');
   assertEquals((row()!['status'] as Row)['error'], 'plan_not_activated');
   assertEquals((await call()).json.error_code, 'plan_not_activated');
   assertEquals(rpcCalls.length, 1);
+  assertEquals(notifications().map((n) => (n['metadata'] as Row)['kind']), ['plan_not_activated']);
   fake.restore();
 });
 
