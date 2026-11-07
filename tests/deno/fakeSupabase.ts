@@ -70,6 +70,8 @@ const matches = (row: Row, params: URLSearchParams) => {
     // ISO timestamps compare correctly as strings
     if (op === 'lt' && !(String(row[key]) < value)) return false;
     if (op === 'gt' && !(String(row[key]) > value)) return false;
+    if (op === 'lte' && !(String(row[key]) <= value)) return false;
+    if (op === 'gte' && !(String(row[key]) >= value)) return false;
     if (op === 'in') {
       const list = value.replace(/^\(|\)$/g, '').split(',');
       if (!list.includes(String(row[key]))) return false;
@@ -86,8 +88,10 @@ export function installFakeSupabase(options: {
   rpc?: (name: string, args: Row) => Response;
   /** Tables whose inserts fail */
   failInserts?: string[];
-  /** Table → primary key column: a plain insert (no on_conflict) of an existing key fails with 23505 */
-  primaryKeys?: Record<string, string>;
+  /** Table → primary key column(s): a plain insert (no on_conflict) of an existing key fails with 23505 */
+  primaryKeys?: Record<string, string | string[]>;
+  /** Runs after an update, with the updated rows: stands in for a database trigger */
+  afterUpdate?: (table: string, rows: Row[]) => void;
 }): FakeSupabase {
   const fake: FakeSupabase = { tables: options.tables, calls: [], restore: () => (activeFetch = null) };
 
@@ -142,6 +146,7 @@ export function installFakeSupabase(options: {
     if (method === 'PATCH') {
       const hit = rows.filter((r) => matches(r, url.searchParams));
       hit.forEach((r) => Object.assign(r, body));
+      if (hit.length > 0) options.afterUpdate?.(table, hit);
       return prefer.includes('return=representation') ? respond(hit) : new Response(null, { status: 204 });
     }
 
@@ -151,10 +156,11 @@ export function installFakeSupabase(options: {
 
     if (method === 'POST') {
       const conflict = url.searchParams.get('on_conflict');
-      const key = options.primaryKeys?.[table];
-      if (!conflict && key) {
+      const pk = options.primaryKeys?.[table];
+      const keyColumns = pk === undefined ? [] : Array.isArray(pk) ? pk : [pk];
+      if (!conflict && keyColumns.length > 0) {
         const items = Array.isArray(body) ? body : [body];
-        if (items.some((item) => rows.some((r) => r[key] === item[key]))) {
+        if (items.some((item) => rows.some((r) => keyColumns.every((column) => r[column] === item[column])))) {
           return Response.json({ code: '23505', message: 'duplicate key value violates unique constraint' }, { status: 409 });
         }
       }

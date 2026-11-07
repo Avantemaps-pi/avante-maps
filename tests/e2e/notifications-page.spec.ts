@@ -156,8 +156,8 @@ const KINDS: Fixture[] = [
     name: 'Thabo M.',
     content:
       'Thabo M. reviewed Harbour Light Coffee: ★★★★★ "Easy to find and quick to reply."',
-    action: 'Reply to review',
-    url: '/business/56',
+    action: 'See review',
+    url: '/review/56?tab=reviews',
   },
   {
     kind: 'topup_received',
