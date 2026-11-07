@@ -44,3 +44,64 @@ $function$;
 
 revoke all on function public.credit_wallet_balance(uuid, numeric, text, text) from public, anon, authenticated;
 grant execute on function public.credit_wallet_balance(uuid, numeric, text, text) to service_role;
+
+-- 2. One plan per payment
+
+alter table public.subscriptions add column if not exists payment_id text;
+create unique index if not exists subscriptions_payment_id_uidx
+  on public.subscriptions (payment_id) where payment_id is not null;
+
+create or replace function public.handle_subscription_after_payment(
+  p_user_id uuid,
+  p_username text,
+  p_email text,
+  p_subscription_tier text,
+  p_frequency text default 'monthly',
+  p_payment_id text default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_subscription_start timestamp;
+  v_subscription_end timestamp;
+begin
+  if p_payment_id is not null then
+    -- The per-user lock pay_plan_from_balance and debit_wallet_balance take: a second call for this
+    -- payment waits for the first, then finds its subscription
+    perform pg_advisory_xact_lock(hashtext(p_user_id::text));
+    if exists (select 1 from public.subscriptions where payment_id = p_payment_id) then
+      return false;
+    end if;
+  end if;
+
+  v_subscription_start := now();
+  v_subscription_end := now() + case when p_frequency = 'annual' then interval '1 year' else interval '1 month' end;
+
+  -- Never changes an existing user's username or email
+  insert into public.users (id, username, email, subscription, created_at)
+  values (p_user_id, coalesce(p_username, 'user_' || left(p_user_id::text, 8)), p_email, p_subscription_tier, now())
+  on conflict (id)
+  do update set subscription = excluded.subscription;
+
+  -- End any existing active subscriptions for this user
+  update public.subscriptions
+  set end_date = now()
+  where user_id = p_user_id
+    and end_date > now();
+
+  insert into public.subscriptions (user_id, plan, start_date, end_date, payment_id)
+  values (p_user_id, p_subscription_tier, v_subscription_start, v_subscription_end, p_payment_id);
+
+  raise log 'Subscription created for user % with plan % from % to %',
+    p_user_id, p_subscription_tier, v_subscription_start, v_subscription_end;
+  return true;
+end;
+$function$;
+
+drop function if exists public.handle_subscription_after_payment(uuid, text, text, text, text);
+
+revoke all on function public.handle_subscription_after_payment(uuid, text, text, text, text, text) from public, anon, authenticated;
+grant execute on function public.handle_subscription_after_payment(uuid, text, text, text, text, text) to service_role;
