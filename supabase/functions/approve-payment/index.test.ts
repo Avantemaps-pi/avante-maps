@@ -11,6 +11,8 @@ Deno.env.set('PI_API_KEY', 'test-pi-key');
 const handler = await loadHandler(new URL('./index.ts', import.meta.url).href);
 
 const OWNER = '00000000-0000-0000-0000-0000000000a1';
+// The owner's Pi account (users.pi_uid), which Pi reports as the payment's user_uid
+const OWNER_PI_UID = 'pi-uid-owner-0001';
 const PAYMENT_ID = 'pay_1';
 
 // supabase-js starts auth refresh timers for each client the function creates, which Deno's
@@ -21,12 +23,25 @@ const test = (name: string, fn: () => Promise<void>) =>
 // $5 at $0.0767 is 65.189 π
 const PLAN = { subscriptionTier: 'small-business', frequency: 'monthly' };
 
-function setup(options: { piAmount?: number; priceUsd?: number | null; rows?: Row[]; piGetStatus?: number; cancelStatus?: number } = {}) {
+function setup(
+  options: {
+    piAmount?: number;
+    priceUsd?: number | null;
+    rows?: Row[];
+    piGetStatus?: number;
+    cancelStatus?: number;
+    /** Who Pi says is paying (default: the owner's Pi account) */
+    piUserUid?: string | null;
+    /** users.pi_uid for the signed-in user (default: the owner's Pi account) */
+    ownerPiUid?: string | null;
+  } = {},
+) {
   const piCalls: string[] = [];
   const fake = installFakeSupabase({
     tables: {
       pi_price: options.priceUsd === null ? [] : [{ id: 1, price_usd: options.priceUsd ?? 0.0767 }],
       payments: options.rows ?? [],
+      users: [{ id: OWNER, pi_uid: options.ownerPiUid === undefined ? OWNER_PI_UID : options.ownerPiUid }],
     },
     users: { 'owner-token': OWNER },
     external: (url, init) => {
@@ -35,7 +50,13 @@ function setup(options: { piAmount?: number; priceUsd?: number | null; rows?: Ro
       const action = url.pathname.split('/').pop();
       piCalls.push(action === PAYMENT_ID ? 'get' : action!);
       if (action === PAYMENT_ID) {
-        return options.piGetStatus ? new Response('nope', { status: options.piGetStatus }) : Response.json({ identifier: PAYMENT_ID, amount: options.piAmount ?? 65.19 });
+        return options.piGetStatus
+          ? new Response('nope', { status: options.piGetStatus })
+          : Response.json({
+            identifier: PAYMENT_ID,
+            amount: options.piAmount ?? 65.19,
+            user_uid: options.piUserUid === undefined ? OWNER_PI_UID : options.piUserUid,
+          });
       }
       if (action === 'cancel') return new Response('{}', { status: options.cancelStatus ?? 200 });
       return Response.json({ identifier: PAYMENT_ID });
@@ -161,7 +182,7 @@ test('a top-up: unchanged, approved with no amount check', async () => {
   const { fake, piCalls, row } = setup({ piAmount: 1 });
   const { status } = await call({ kind: 'wallet_topup' }, 1);
   assertEquals(status, 200);
-  assertEquals(piCalls, ['approve']);
+  assertEquals(piCalls, ['get', 'approve']);
   assertEquals(row()!['approved_amount_pi'], undefined);
   fake.restore();
 });
@@ -170,6 +191,81 @@ test('a message fee: unchanged, approved with no amount check', async () => {
   const { fake, piCalls } = setup({ piAmount: 0.5 });
   const { status } = await call({ kind: 'message_fee', feePi: 0.5 }, 0.5);
   assertEquals(status, 200);
-  assertEquals(piCalls, ['approve']);
+  assertEquals(piCalls, ['get', 'approve']);
   fake.restore();
+});
+
+// ---- Who paid: the Pi account must be the signed-in user's
+
+const TOPUP = { kind: 'wallet_topup' };
+const FEE = { kind: 'message_fee', conversationId: '11111111-1111-4111-8111-111111111111', businessId: 7, feePi: 0.5 };
+const MISMATCH_MESSAGE = "This payment was started from a different Pi account. Sign in with the account you're paying from.";
+
+for (const [kind, metadata, amount] of [['top up', TOPUP, 3], ['message fee', FEE, 0.5], ['plan', PLAN, 65.19]] as const) {
+  test(`paid from another Pi account (${kind}): cancelled at Pi, 403, not approved, row marked`, async () => {
+    const { fake, piCalls, row } = setup({ piAmount: amount, piUserUid: 'pi-uid-someone-else' });
+    const { status, json } = await call(metadata, amount);
+    assertEquals(status, 403);
+    assertEquals(json.success, false);
+    assertEquals(json.error_code, 'payment_user_mismatch');
+    assertEquals(json.message, MISMATCH_MESSAGE);
+    assertEquals(piCalls, ['get', 'cancel']);
+    assertEquals(row()!['status'], { approved: false, verified: false, completed: false, cancelled: true, error: 'payment_user_mismatch' });
+    assertEquals(row()!['approved_amount_pi'], undefined);
+    fake.restore();
+  });
+}
+
+test('the signed-in user has no pi_uid: refused the same way', async () => {
+  const { fake, piCalls, row } = setup({ piAmount: 3, ownerPiUid: null });
+  const { status, json } = await call(TOPUP, 3);
+  assertEquals([status, json.error_code], [403, 'payment_user_mismatch']);
+  assertEquals(piCalls, ['get', 'cancel']);
+  assertEquals((row()!['status'] as Row)['error'], 'payment_user_mismatch');
+  fake.restore();
+});
+
+test("Pi doesn't say who paid: refused the same way", async () => {
+  const { fake, piCalls } = setup({ piAmount: 3, piUserUid: null });
+  const { status, json } = await call(TOPUP, 3);
+  assertEquals([status, json.error_code], [403, 'payment_user_mismatch']);
+  assertEquals(piCalls, ['get', 'cancel']);
+  fake.restore();
+});
+
+test('the Pi account matches: a top up, a fee and a plan are approved as today', async () => {
+  for (const [metadata, amount] of [[TOPUP, 3], [FEE, 0.5], [PLAN, 65.19]] as const) {
+    const { fake, piCalls, row } = setup({ piAmount: amount });
+    const { status, json } = await call(metadata, amount);
+    assertEquals([status, json.success], [200, true], JSON.stringify(metadata));
+    assertEquals(piCalls, ['get', 'approve']);
+    assertEquals((row()!['status'] as Row)['approved'], true);
+    fake.restore();
+  }
+});
+
+test('a top up whose Pi payment can\'t be read: 502, not approved, the row stays open', async () => {
+  const { fake, piCalls, row } = setup({ piGetStatus: 500 });
+  const { status } = await call(TOPUP, 3);
+  assertEquals(status, 502);
+  assertEquals(piCalls, ['get']);
+  assertEquals(row()!['status'], { approved: false, verified: false, completed: false, cancelled: false });
+  fake.restore();
+});
+
+test('logs never hold a whole Pi uid', async () => {
+  const lines: string[] = [];
+  const original = { log: console.log, warn: console.warn, error: console.error };
+  console.log = console.warn = console.error = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+  try {
+    const { fake } = setup({ piAmount: 3, piUserUid: 'pi-uid-someone-else' });
+    await call(TOPUP, 3);
+    fake.restore();
+  } finally {
+    Object.assign(console, original);
+  }
+  const output = lines.join('\n');
+  assert(!output.includes('pi-uid-someone-else'), output);
+  assert(!output.includes(OWNER_PI_UID), output);
+  assert(output.includes('pi-uid…'));
 });

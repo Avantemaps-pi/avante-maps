@@ -11,6 +11,8 @@ Deno.env.set('PI_API_KEY', 'test-pi-key');
 const handler = await loadHandler(new URL('./index.ts', import.meta.url).href);
 
 const OWNER = '00000000-0000-0000-0000-0000000000a1';
+// The owner's Pi account (users.pi_uid), which Pi reports as the payment's user_uid
+const OWNER_PI_UID = 'pi-uid-owner-0001';
 const PAYMENT_ID = 'pay_1';
 const TXID = 'abc123';
 
@@ -29,34 +31,106 @@ const approvedRow = (extra: Row = {}): Row => ({
   ...extra,
 });
 
-function setup(options: { rows?: Row[]; piAmount?: number; priceUsd?: number; rpcError?: string; piAlreadyCompleted?: boolean } = {}) {
+interface SetupOptions {
+  rows?: Row[];
+  piAmount?: number;
+  priceUsd?: number;
+  rpcError?: string;
+  piAlreadyCompleted?: boolean;
+  /** Who Pi says paid (default: the owner's Pi account) */
+  piUserUid?: string | null;
+  /** How many of Pi's GET /payments/{id} calls fail first */
+  piGetFailures?: number;
+  /** How many credit_wallet_balance calls fail first */
+  creditFailures?: number;
+  /** How many message_fees writes fail first */
+  feeFailures?: number;
+}
+
+function setup(options: SetupOptions = {}) {
   const rpcCalls: Row[] = [];
   const credits: Row[] = [];
+  let piGetFailures = options.piGetFailures ?? 0;
+  let creditFailures = options.creditFailures ?? 0;
+  let feeFailures = options.feeFailures ?? 0;
+  // handle_subscription_after_payment: one grant per payment, as the database does now
+  const grantedPayments = new Set<string>();
   const fake = installFakeSupabase({
     tables: {
       pi_price: [{ id: 1, price_usd: options.priceUsd ?? 0.0767 }],
       payments: options.rows ?? [approvedRow()],
       notifications: [],
+      users: [{ id: OWNER, pi_uid: OWNER_PI_UID }],
+      wallet_ledger: [],
+      message_fees: [],
     },
     users: { 'owner-token': OWNER },
-    external: (url) => {
+    external: (url, init) => {
       if (url.host !== 'api.minepi.com') return undefined;
       if (url.pathname.endsWith('/complete') && options.piAlreadyCompleted) {
         return Response.json({ error: 'already_completed', message: 'This payment was already completed' }, { status: 400 });
       }
-      return Response.json({ identifier: PAYMENT_ID, amount: options.piAmount ?? 65.19 });
+      if (init?.method === 'GET' && piGetFailures > 0) {
+        piGetFailures -= 1;
+        return new Response('unavailable', { status: 503 });
+      }
+      return Response.json({
+        identifier: PAYMENT_ID,
+        amount: options.piAmount ?? 65.19,
+        user_uid: options.piUserUid === undefined ? OWNER_PI_UID : options.piUserUid,
+      });
     },
     rpc: (name, args) => {
       if (name === 'credit_wallet_balance') {
         credits.push(args);
-        return Response.json(args['p_amount_pi']);
+        if (creditFailures > 0) {
+          creditFailures -= 1;
+          return Response.json({ code: 'XX000', message: 'credit failed' }, { status: 500 });
+        }
+        // As the database does: once per payment, the balance either way
+        const ledger = fake.tables['wallet_ledger']!;
+        if (!ledger.some((l) => l['payment_id'] === args['p_payment_id'])) {
+          ledger.push({ id: ledger.length + 1, user_id: args['p_user_id'], amount_pi: args['p_amount_pi'], payment_id: args['p_payment_id'] });
+        }
+        return Response.json(ledger.reduce((n, l) => n + Number(l['amount_pi']), 0));
       }
       assertEquals(name, 'handle_subscription_after_payment');
       rpcCalls.push(args);
-      return options.rpcError ? Response.json({ code: 'P0001', message: options.rpcError }, { status: 400 }) : Response.json(null);
+      if (options.rpcError) return Response.json({ code: 'P0001', message: options.rpcError }, { status: 400 });
+      const paymentId = String(args['p_payment_id']);
+      if (grantedPayments.has(paymentId)) return Response.json(false);
+      grantedPayments.add(paymentId);
+      return Response.json(true);
     },
+    failInserts: [],
   });
-  return { fake, rpcCalls, credits, row: () => fake.tables['payments']![0], notifications: () => fake.tables['notifications']! };
+  // message_fees writes can fail first (the fake's failInserts is all or nothing)
+  if (feeFailures > 0) {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const method = (input instanceof Request ? input.method : init?.method ?? 'GET').toUpperCase();
+      if (url.pathname === '/rest/v1/message_fees' && method === 'POST' && feeFailures > 0) {
+        feeFailures -= 1;
+        return Promise.resolve(Response.json({ code: 'XX000', message: 'fee insert failed' }, { status: 500 }));
+      }
+      return realFetch(input, init);
+    };
+    const restore = fake.restore;
+    fake.restore = () => {
+      globalThis.fetch = realFetch;
+      restore();
+    };
+  }
+  return {
+    fake,
+    rpcCalls,
+    credits,
+    row: () => fake.tables['payments']![0],
+    notifications: () => fake.tables['notifications']!,
+    ledger: () => fake.tables['wallet_ledger']!,
+    fees: () => fake.tables['message_fees']!,
+  };
 }
 
 const call = async (metadata: Record<string, unknown> = PLAN) => {
@@ -178,9 +252,13 @@ test('a retry after a success still reports success, without granting twice', as
 
 test('a top-up: unchanged, credited with no plan, and a topup_received notification', async () => {
   const fake = installFakeSupabase({
-    tables: { payments: [approvedRow({ metadata: { kind: 'wallet_topup' }, approved_amount_pi: null })], notifications: [] },
+    tables: {
+      payments: [approvedRow({ metadata: { kind: 'wallet_topup' }, approved_amount_pi: null })],
+      notifications: [],
+      users: [{ id: OWNER, pi_uid: OWNER_PI_UID }],
+    },
     users: { 'owner-token': OWNER },
-    external: () => Response.json({ identifier: PAYMENT_ID, amount: 3 }),
+    external: () => Response.json({ identifier: PAYMENT_ID, amount: 3, user_uid: OWNER_PI_UID }),
     rpc: (name, args) => {
       assertEquals(name, 'credit_wallet_balance');
       assertEquals(args['p_amount_pi'], 3);
@@ -372,5 +450,211 @@ test('an old completed row (like 25 March) never gets a plan again', async () =>
   assertEquals([status, json.success], [200, true]);
   assertEquals(rpcCalls.length, 0);
   assertEquals(notifications().length, 0);
+  fake.restore();
+});
+
+// ---- Who paid: the Pi account must be the signed-in user's
+
+const TOPUP = { kind: 'wallet_topup' };
+const FEE = { kind: 'message_fee', conversationId: '11111111-1111-4111-8111-111111111111', businessId: 7, feePi: 0.5 };
+const MISMATCH = "This payment was started from a different Pi account. Sign in with the account you're paying from.";
+
+for (const [kind, metadata, amount, row] of [
+  ['top up', TOPUP, 3, approvedRow({ metadata: TOPUP, approved_amount_pi: null })],
+  ['message fee', FEE, 0.5, approvedRow({ metadata: FEE, approved_amount_pi: null })],
+  ['plan', PLAN, 65.19, approvedRow()],
+] as const) {
+  test(`paid from another Pi account (${kind}): 403, nothing credited, recorded or granted, row marked; a retry gets the same`, async () => {
+    const { fake, credits, rpcCalls, row: current, notifications, fees } = setup({ piAmount: amount, piUserUid: 'pi-uid-someone-else', rows: [row] });
+    const first = await call(metadata);
+    assertEquals(first.status, 403);
+    assertEquals([first.json.success, first.json.error_code, first.json.message], [false, 'payment_user_mismatch', MISMATCH]);
+    assertEquals(credits.length, 0);
+    assertEquals(rpcCalls.length, 0);
+    assertEquals(fees().length, 0);
+    assertEquals(notifications().length, 0);
+    // The Pi has moved: completed, and marked
+    assertEquals(current()!['status'], { approved: true, verified: true, completed: true, cancelled: false, error: 'payment_user_mismatch' });
+    const retry = await call(metadata);
+    assertEquals([retry.status, retry.json.error_code], [403, 'payment_user_mismatch']);
+    assertEquals(credits.length + rpcCalls.length + fees().length, 0);
+    fake.restore();
+  });
+}
+
+test('the signed-in user has no pi_uid: refused the same way', async () => {
+  const { fake, credits } = setup({ piAmount: 3, rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
+  fake.tables['users']![0]!['pi_uid'] = null;
+  const { status, json } = await call(TOPUP);
+  assertEquals([status, json.error_code], [403, 'payment_user_mismatch']);
+  assertEquals(credits.length, 0);
+  fake.restore();
+});
+
+test('logs never hold a whole Pi uid', async () => {
+  const lines: string[] = [];
+  const original = { log: console.log, warn: console.warn, error: console.error };
+  console.log = console.warn = console.error = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+  try {
+    const { fake } = setup({ piAmount: 3, piUserUid: 'pi-uid-someone-else', rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
+    await call(TOPUP);
+    fake.restore();
+  } finally {
+    Object.assign(console, original);
+  }
+  const output = lines.join('\n');
+  assert(!output.includes('pi-uid-someone-else'), output);
+  assert(!output.includes(OWNER_PI_UID), output);
+});
+
+// ---- Top ups and message fees can't be lost on a retry
+
+test('a top up whose credit failed: a retry credits it once and returns newBalance; another retry credits nothing', async () => {
+  const { fake, credits, row, ledger, notifications } = setup({
+    piAmount: 3,
+    creditFailures: 1,
+    rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })],
+  });
+  const first = await call(TOPUP);
+  assertEquals(first.status, 500);
+  assertEquals(ledger().length, 0);
+  assertEquals(row()!['status'], { approved: true, verified: true, completed: true, cancelled: false });
+
+  // The retry finds the row completed but not credited, and finishes the job from the row
+  const retry = await call({ kind: 'wallet_topup' });
+  assertEquals([retry.status, retry.json.success, retry.json.newBalance], [200, true, 3]);
+  assertEquals(ledger().length, 1);
+  assertEquals(ledger()[0]!['amount_pi'], 3);
+  assertEquals((row()!['status'] as Row)['credited'], true);
+  assertEquals(notifications().map((n) => (n['metadata'] as Row)['kind']), ['topup_received']);
+
+  const again = await call(TOPUP);
+  assertEquals([again.status, again.json.message], [200, 'Payment was already completed']);
+  assertEquals(ledger().length, 1);
+  assertEquals(credits.length, 2);
+  assertEquals(notifications().length, 1);
+  fake.restore();
+});
+
+test("a top up whose Pi amount couldn't be read: 502, then a retry credits it from Pi's amount", async () => {
+  const { fake, ledger, row } = setup({ piAmount: 4.5, piGetFailures: 1, rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
+  assertEquals((await call(TOPUP)).status, 502);
+  assertEquals(ledger().length, 0);
+  assertEquals((row()!['status'] as Row)['completed'], true);
+  const retry = await call(TOPUP);
+  assertEquals([retry.status, retry.json.newBalance], [200, 4.5]);
+  assertEquals((row()!['status'] as Row)['credited'], true);
+  fake.restore();
+});
+
+test("the retry uses the row's metadata, not the request's", async () => {
+  const { fake, ledger, rpcCalls } = setup({ piAmount: 3, piGetFailures: 1, rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
+  assertEquals((await call(TOPUP)).status, 502);
+  // The retry claims a plan: the row says top up
+  const retry = await call(PLAN);
+  assertEquals([retry.status, retry.json.newBalance], [200, 3]);
+  assertEquals(ledger().length, 1);
+  assertEquals(rpcCalls.length, 0);
+  fake.restore();
+});
+
+test("Pi unreachable on the retry: 502, and it stays retryable", async () => {
+  const { fake, ledger, row } = setup({ piAmount: 3, piGetFailures: 2, rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
+  assertEquals((await call(TOPUP)).status, 502);
+  assertEquals((await call(TOPUP)).status, 502);
+  assertEquals(row()!['status'], { approved: true, verified: true, completed: true, cancelled: false });
+  assertEquals((await call(TOPUP)).json.newBalance, 3);
+  assertEquals(ledger().length, 1);
+  fake.restore();
+});
+
+test('a top up credited before this change (no flag): the retry marks it and credits nothing more, with no second notice', async () => {
+  const { fake, ledger, row, notifications } = setup({
+    piAmount: 3,
+    rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null, status: { approved: true, verified: true, completed: true, cancelled: false }, txid: TXID })],
+  });
+  fake.tables['wallet_ledger']!.push({ id: 1, user_id: OWNER, amount_pi: 3, payment_id: PAYMENT_ID });
+  const { status, json } = await call(TOPUP);
+  assertEquals([status, json.newBalance], [200, 3]);
+  assertEquals(ledger().length, 1);
+  assertEquals((row()!['status'] as Row)['credited'], true);
+  assertEquals(notifications().length, 0);
+  fake.restore();
+});
+
+test("a message fee whose amount couldn't be read: a retry records it once, at the platform fee; another retry records nothing", async () => {
+  const { fake, fees, row, notifications } = setup({ piAmount: 0.5, piGetFailures: 1, rows: [approvedRow({ metadata: FEE, approved_amount_pi: null })] });
+  assertEquals((await call(FEE)).status, 502);
+  assertEquals(fees().length, 0);
+  const retry = await call({ kind: 'message_fee', conversationId: FEE.conversationId, businessId: 7, feePi: 99 });
+  assertEquals([retry.status, retry.json.success], [200, true]);
+  assertEquals(fees().length, 1);
+  assertEquals(fees()[0]!['fee_pi'], 0.5);
+  assertEquals(fees()[0]!['conversation_id'], FEE.conversationId);
+  assertEquals((row()!['status'] as Row)['fee_recorded'], true);
+  assertEquals(notifications().length, 1);
+  const again = await call(FEE);
+  assertEquals([again.status, again.json.message], [200, 'Payment was already completed']);
+  assertEquals(fees().length, 1);
+  assertEquals(notifications().length, 1);
+  fake.restore();
+});
+
+test('a message fee whose row failed to write: 500 (not success), and a retry records it', async () => {
+  const { fake, fees, row } = setup({ piAmount: 0.5, feeFailures: 1, rows: [approvedRow({ metadata: FEE, approved_amount_pi: null })] });
+  const first = await call(FEE);
+  assertEquals([first.status, first.json.success], [500, false]);
+  assertEquals((row()!['status'] as Row)['fee_recorded'], undefined);
+  const retry = await call(FEE);
+  assertEquals(retry.status, 200);
+  assertEquals(fees().length, 1);
+  assertEquals((row()!['status'] as Row)['fee_recorded'], true);
+  fake.restore();
+});
+
+test('a message fee below the platform fee on the retry: refused and marked, nothing recorded', async () => {
+  const { fake, fees, row } = setup({ piAmount: 0.1, piGetFailures: 1, rows: [approvedRow({ metadata: FEE, approved_amount_pi: null })] });
+  assertEquals((await call(FEE)).status, 502);
+  const retry = await call(FEE);
+  assertEquals([retry.status, retry.json.error_code], [400, 'amount_mismatch_after_completion']);
+  assertEquals(fees().length, 0);
+  assertEquals((row()!['status'] as Row)['error'], 'amount_mismatch_after_completion');
+  fake.restore();
+});
+
+test('a fresh top up and a fresh fee set their flags', async () => {
+  const topUp = setup({ piAmount: 3, rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
+  assertEquals((await call(TOPUP)).status, 200);
+  assertEquals((topUp.row()!['status'] as Row)['credited'], true);
+  topUp.fake.restore();
+  const fee = setup({ piAmount: 0.5, rows: [approvedRow({ metadata: FEE, approved_amount_pi: null })] });
+  assertEquals((await call(FEE)).status, 200);
+  assertEquals((fee.row()!['status'] as Row)['fee_recorded'], true);
+  fee.fake.restore();
+});
+
+test('Pi says already completed, top up with no flag: reaches the credit and sets it', async () => {
+  const { fake, ledger, row } = setup({ piAlreadyCompleted: true, piAmount: 3, rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
+  const { status, json } = await call(TOPUP);
+  assertEquals([status, json.newBalance], [200, 3]);
+  assertEquals(ledger().length, 1);
+  assertEquals((row()!['status'] as Row)['credited'], true);
+  fake.restore();
+});
+
+// ---- A plan is granted once per payment
+
+test('the plan granted twice in a row for one payment (the database says false the second time): one notification', async () => {
+  const { fake, rpcCalls, row, notifications } = setup();
+  assertEquals((await call()).status, 200);
+  assertEquals(rpcCalls[0]!['p_payment_id'], PAYMENT_ID);
+  // The recovery path runs again (as if it raced the first): the database refuses a second grant
+  (row()!['status'] as Row)['plan_activated'] = false;
+  delete (row()!['status'] as Row)['plan_activated'];
+  const again = await call();
+  assertEquals([again.status, again.json.success], [200, true]);
+  assertEquals(rpcCalls.length, 2);
+  assertEquals((row()!['status'] as Row)['plan_activated'], true);
+  assertEquals(notifications().map((n) => (n['metadata'] as Row)['kind']), ['plan_paid']);
   fake.restore();
 });
