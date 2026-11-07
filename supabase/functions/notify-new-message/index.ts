@@ -1,17 +1,23 @@
 /**
- * Emails a business owner when a customer messages their business in CommuniCon.
+ * Tells a business owner when a customer messages their business in CommuniCon: an in-app
+ * notification, and an email when the business is active, hasn't opted out and has a confirmed
+ * contact email.
  *
  * Called by the trg_notify_new_message trigger on messages (pg_net, with the X-Cron-Secret header
  * from Vault), never by the browser. Deploy with verify_jwt off: the trigger sends no JWT.
  *
- * One email per conversation until the owner reads it: sent only while this message is the only
- * one the owner hasn't read (conversations.business_unread = 1, counted by
- * bump_conversation_on_message and zeroed when the owner opens the conversation), and at most once
- * every 10 minutes per conversation (message_email_log), so bursts and repeated calls send once.
+ * Once per conversation until the owner reads it: only while this message is the only one the
+ * owner hasn't read (conversations.business_unread = 1, counted by bump_conversation_on_message
+ * and zeroed when the owner opens the conversation), and at most once every 10 minutes per
+ * conversation (message_email_log), so bursts and repeated calls tell them once. The in-app
+ * notification also carries the message id, so it's never added twice for one message.
  *
  * Logs carry ids and the outcome only: never the email address or the message text.
  */
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  createClient,
+  type SupabaseClient,
+} from 'https://esm.sh/@supabase/supabase-js@2';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 import { verifyCronRequest } from '../_shared/cronAuth.ts';
 
@@ -136,6 +142,70 @@ async function sendEmail(
   }
 }
 
+interface OwnerNotification {
+  ownerId: string;
+  messageId: string;
+  conversationId: string;
+  businessId: number;
+  businessName: string;
+  username: string | null;
+  content: string;
+  emailed: boolean;
+}
+
+// The owner's in-app "new message" notification (metadata contract: kind, businessId,
+// businessName, actionLabel, emailed; click_url the reply link). Returns whether one was added
+async function notifyOwner(
+  supabase: SupabaseClient,
+  n: OwnerNotification,
+): Promise<boolean> {
+  try {
+    const { data: existing, error: existingError } = await supabase
+      .from('notifications')
+      .select('id')
+      .eq('user_id', n.ownerId)
+      .eq('metadata->>messageId', n.messageId)
+      .limit(1);
+    if (existingError) throw existingError;
+    if (existing && existing.length > 0) return false;
+    const { error } = await supabase.from('notifications').insert({
+      user_id: n.ownerId,
+      type: 'message',
+      content: n.content,
+      metadata: {
+        kind: 'new_message',
+        businessId: n.businessId,
+        businessName: n.businessName,
+        conversationId: n.conversationId,
+        messageId: n.messageId,
+        actionLabel: 'Reply',
+        emailed: n.emailed,
+        ...(n.username ? { userName: n.username } : {}),
+      },
+      priority: 'medium',
+      read: false,
+      delivery_status: 'delivered',
+      delivered_at: new Date().toISOString(),
+      click_url: `/communicon?conversation=${n.conversationId}`,
+    });
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err
+        ? String(err.code)
+        : 'unknown';
+    log({
+      message_id: n.messageId,
+      conversation_id: n.conversationId,
+      notified: false,
+      reason: 'notification_failed',
+      code,
+    });
+    return false;
+  }
+}
+
 Deno.serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
@@ -155,8 +225,14 @@ Deno.serve(async (req) => {
 
   try {
     const skip = (reason: SkipReason, ids: Record<string, unknown> = {}) => {
-      log({ message_id: messageId, ...ids, sent: false, reason });
-      return json({ sent: false, reason });
+      log({
+        message_id: messageId,
+        ...ids,
+        sent: false,
+        notified: false,
+        reason,
+      });
+      return json({ sent: false, notified: false, reason });
     };
 
     const { data: message, error: messageError } = await supabase
@@ -189,23 +265,20 @@ Deno.serve(async (req) => {
     const { data: business, error: businessError } = await supabase
       .from('businesses')
       .select(
-        'business_name, contact_info, contact_email_verified_for, notify_new_message_email, is_active',
+        'owner_id, business_name, contact_info, contact_email_verified_for, notify_new_message_email, is_active',
       )
       .eq('id', conversation.business_id)
       .maybeSingle();
     if (businessError) throw businessError;
-    if (!business || !business.is_active) return skip('business_inactive', ids);
-    if (business.notify_new_message_email === false)
-      return skip('opted_out', ids);
-    const to = confirmedEmail(business);
-    if (!to) return skip('email_not_confirmed', ids);
+    if (!business) return skip('business_inactive', ids);
 
-    // The owner hasn't read an earlier message yet: they were emailed about that one
+    // The owner hasn't read an earlier message yet: they were told about that one
     if ((conversation.business_unread ?? 0) > 1)
       return skip('earlier_message_unread', ids);
 
-    // Claim the send before calling Brevo, so concurrent calls send once: insert the log row, or
-    // take over one older than 10 minutes. Either is a single statement, atomic in Postgres
+    // Claim before telling anyone, so concurrent calls and repeats within 10 minutes do it once:
+    // insert the log row, or take over one older than 10 minutes. Either is a single statement,
+    // atomic in Postgres
     const now = new Date();
     const claim = {
       conversation_id: conversation.id,
@@ -236,19 +309,43 @@ Deno.serve(async (req) => {
       .select('username')
       .eq('id', conversation.customer_id)
       .maybeSingle();
-    const username = customer?.username?.trim() || 'A customer';
+    const realUsername = customer?.username?.trim() || null;
+    const username = realUsername || 'A customer';
     const businessName = business.business_name?.trim() || 'your business';
+    const preview = firstLine(message.body ?? '');
 
-    const failedStatus = await sendEmail(
-      to,
-      `New message for ${businessName}`,
-      emailHtml(
-        username,
-        businessName,
-        firstLine(message.body ?? ''),
-        replyLink(conversation.id),
-      ),
-    );
+    // The email: only for an active business that hasn't opted out, to its confirmed address
+    const to = confirmedEmail(business);
+    const emailSkipped: SkipReason | null = !business.is_active
+      ? 'business_inactive'
+      : business.notify_new_message_email === false
+        ? 'opted_out'
+        : !to
+          ? 'email_not_confirmed'
+          : null;
+    let failedStatus: number | null = null;
+    if (!emailSkipped && to) {
+      failedStatus = await sendEmail(
+        to,
+        `New message for ${businessName}`,
+        emailHtml(username, businessName, preview, replyLink(conversation.id)),
+      );
+    }
+    const sent = !emailSkipped && failedStatus === null;
+
+    // The in-app notification, whether or not an email went. Keyed by the message too, so a
+    // repeat after a failed email (which releases the claim) can't add a second one
+    const notified = await notifyOwner(supabase, {
+      ownerId: business.owner_id,
+      messageId: message.id,
+      conversationId: conversation.id,
+      businessId: conversation.business_id,
+      businessName,
+      username: realUsername,
+      content: `${username} messaged ${businessName}: “${preview}”`,
+      emailed: sent,
+    });
+
     if (failedStatus !== null) {
       // Release the claim so a later message can try again
       await supabase
@@ -260,14 +357,25 @@ Deno.serve(async (req) => {
         message_id: messageId,
         ...ids,
         sent: false,
+        notified,
         reason: 'email_failed',
         brevo_status: failedStatus,
       });
-      return json({ sent: false, reason: 'email_failed' }, 502);
+      return json({ sent: false, notified, reason: 'email_failed' }, 502);
     }
 
-    log({ message_id: messageId, ...ids, sent: true });
-    return json({ sent: true });
+    if (emailSkipped) {
+      log({
+        message_id: messageId,
+        ...ids,
+        sent: false,
+        notified,
+        reason: emailSkipped,
+      });
+      return json({ sent: false, notified, reason: emailSkipped });
+    }
+    log({ message_id: messageId, ...ids, sent: true, notified });
+    return json({ sent: true, notified });
   } catch (err) {
     const code =
       typeof err === 'object' && err !== null && 'code' in err
