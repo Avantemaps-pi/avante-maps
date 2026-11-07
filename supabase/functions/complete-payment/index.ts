@@ -1,7 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
-import { createPaymentNotification } from '../_shared/notifications.ts';
 import { AMOUNT_TOLERANCE, getExpectedPlanPi } from '../_shared/prices.ts';
 import {
   getOrCreateLifecycleId,
@@ -22,6 +21,61 @@ const AMOUNT_MISMATCH_AFTER_COMPLETION = {
   error_code: 'amount_mismatch_after_completion',
   message: "Payment received, but it doesn't match the price. Please contact support.",
 };
+
+const PLAN_NAMES: Record<string, string> = {
+  individual: 'Individual',
+  'small-business': 'Small Business',
+  organization: 'Organization',
+};
+const planName = (tier: string) => PLAN_NAMES[tier] ?? tier;
+
+interface PaymentNotification {
+  kind: 'topup_received' | 'plan_paid' | 'plan_not_activated';
+  content: string;
+  metadata: Record<string, unknown>;
+  actionLabel: string;
+  clickUrl: string;
+}
+
+// The user's in-app notification, in the Notifications page's metadata contract (kind,
+// actionLabel; click_url the action's path). Never throws: a payment isn't undone by it
+async function notifyPayment(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  n: PaymentNotification,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.from('notifications').insert({
+      user_id: userId,
+      type: 'payment',
+      content: n.content,
+      metadata: { ...n.metadata, kind: n.kind, actionLabel: n.actionLabel },
+      priority: 'high',
+      read: false,
+      delivery_status: 'delivered',
+      delivered_at: new Date().toISOString(),
+      click_url: n.clickUrl,
+    });
+    return error ? { success: false, error: error.message } : { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// A top up, or a plan paid for and active: the same text as before
+const notifyPaymentReceived = (
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  amount: number,
+  subscriptionTier?: string,
+) =>
+  notifyPayment(supabase, userId, {
+    kind: subscriptionTier ? 'plan_paid' : 'topup_received',
+    content: `Payment of ${amount} Pi received successfully!${subscriptionTier ? ` Your ${subscriptionTier} subscription is now active.` : ''}`,
+    metadata: { amount, tier: subscriptionTier, status: 'approved' },
+    actionLabel: subscriptionTier ? 'View plan' : 'Open wallet',
+    clickUrl: subscriptionTier ? '/pricing' : '/wallet',
+  });
 
 const PaymentRequestSchema = z.object({
   paymentId: z.string()
@@ -103,6 +157,17 @@ Deno.serve(async (req) => {
         status: { ...baseStatus, error: 'plan_not_activated' },
         updated_at: new Date().toISOString(),
       }).eq('payment_id', paymentId);
+      // Told once, here where it's first recorded (a retry gets the terminal answer without this)
+      const notified = await notifyPayment(supabaseClient, userId, {
+        kind: 'plan_not_activated',
+        content: `Payment received for the ${planName(tier)} plan, but your plan isn't active yet. Contact support and we'll sort it out.`,
+        metadata: { tier, status: 'plan_not_activated' },
+        actionLabel: 'Contact support',
+        clickUrl: '/contact',
+      });
+      if (!notified.success) {
+        log.warn(`${FN}.notify.error`, { stage: 'notify', message: notified.error });
+      }
       return respond({ ...PLAN_NOT_ACTIVATED, paymentId, txid }, 500);
     }
 
@@ -256,7 +321,7 @@ Deno.serve(async (req) => {
           existingPayment.metadata?.frequency === 'annual' ? 'annual' : 'monthly',
         );
         if (failure) return failure;
-        const notified = await createPaymentNotification(
+        const notified = await notifyPaymentReceived(
           supabaseClient,
           paymentRequest.userId,
           Number(existingPayment.approved_amount_pi),
@@ -468,11 +533,12 @@ Deno.serve(async (req) => {
         });
 
         try {
-          await createPaymentNotification(
+          const notified = await notifyPaymentReceived(
             supabaseClient,
             paymentRequest.userId,
             verifiedPiAmount,
           );
+          if (!notified.success) throw new Error(notified.error);
           log.info(`${FN}.notify.created`, { stage: 'notify' });
         } catch (notifError) {
           log.warn(`${FN}.notify.error`, {
@@ -606,12 +672,13 @@ Deno.serve(async (req) => {
       }
 
       try {
-        await createPaymentNotification(
+        const notified = await notifyPaymentReceived(
           supabaseClient,
           paymentRequest.userId,
           paymentRequest.amount,
           paymentRequest.metadata?.subscriptionTier
         );
+        if (!notified.success) throw new Error(notified.error);
         log.info(`${FN}.notify.created`, { stage: 'notify' });
       } catch (notifError) {
         log.warn(`${FN}.notify.error`, {
