@@ -58,6 +58,14 @@ const matches = (row: Row, params: URLSearchParams) => {
     if (['select', 'on_conflict', 'columns', 'order', 'limit'].includes(key)) continue;
     const [op, ...rest] = raw.split('.');
     const value = rest.join('.');
+    // A JSON field (column->>key) compares as text
+    if (key.includes('->>')) {
+      const [column, field] = key.split('->>');
+      const json = row[column!] as Record<string, unknown> | null | undefined;
+      const text = json?.[field!] == null ? '' : String(json[field!]);
+      if (op === 'eq' && text !== value) return false;
+      continue;
+    }
     if (op === 'eq' && String(row[key]) !== value) return false;
     // ISO timestamps compare correctly as strings
     if (op === 'lt' && !(String(row[key]) < value)) return false;
