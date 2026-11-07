@@ -136,3 +136,50 @@ drop trigger if exists trg_notify_business_account_change on public.businesses;
 create trigger trg_notify_business_account_change
   after update of pi_wallet_address, contact_info on public.businesses
   for each row execute function public.notify_business_account_change();
+
+-- 3. New reviews, to the business's owner (not when the owner reviews their own business)
+
+create or replace function public.notify_new_review()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $f$
+declare
+  v_owner uuid;
+  v_name text;
+  v_text text := nullif(trim(coalesce(new.content, '')), '');
+begin
+  begin
+    select owner_id, business_name into v_owner, v_name from public.businesses where id = new.business_id;
+    if v_owner is null or v_owner = new.user_id then
+      return new;
+    end if;
+    perform public.create_notification(
+      v_owner,
+      'review',
+      'new_review',
+      'New review for ' || v_name || ': ' || new.rating || '★'
+        || case
+             when v_text is null then ''
+             when length(v_text) > 120 then ' “' || rtrim(left(v_text, 120)) || '…”'
+             else ' “' || v_text || '”'
+           end,
+      jsonb_build_object('businessId', new.business_id, 'businessName', v_name, 'rating', new.rating,
+        'reviewId', new.id, 'actionLabel', 'Reply to review'),
+      '/review/' || new.business_id,
+      'medium'
+    );
+  exception when others then
+    raise warning 'notify_new_review: notification for review % failed: %', new.id, sqlerrm;
+  end;
+  return new;
+end
+$f$;
+
+revoke all on function public.notify_new_review() from public, anon, authenticated;
+
+drop trigger if exists trg_notify_new_review on public.reviews;
+create trigger trg_notify_new_review
+  after insert on public.reviews
+  for each row execute function public.notify_new_review();
