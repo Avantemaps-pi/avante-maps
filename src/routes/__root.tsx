@@ -41,11 +41,14 @@ import heroIcon144 from "@/assets/avante-icon-144.webp";
 const PI_INIT_SCRIPT = `
       // Wrapped in an IIFE so nothing is declared at the top level: the router can
       // re-insert head scripts on client-side navigation, and a second top-level
-      // "const hostname" would throw. The flag keeps Pi.init() to once per page load.
+      // "const hostname" would throw.
+      //
+      // Init is per SDK instance, not per page: a reloaded pi-sdk.js replaces window.Pi with
+      // a new, uninitialised object, so a page flag can say "initialised" when the current
+      // window.Pi isn't. Pi.init() runs whenever window.Pi has no __avanteInit marker, and the
+      // marker is set on that object (non-enumerable). window.__piInitializedInstance keeps
+      // the same answer if the object can't take a property.
       (function () {
-        if (window.__piInitScriptRan) return;
-        window.__piInitScriptRan = true;
-
         // Sandbox only outside the Pi Browser on a non-mainnet host (desktop testing in Pi's
         // sandbox). Inside the Pi Browser, on any hostname, and on the exact mainnet hostnames:
         // false. Exact-match hostnames only: a suffix check once classified testnet as mainnet.
@@ -57,21 +60,28 @@ const PI_INIT_SCRIPT = `
         const isMainnetHost = ${JSON.stringify(MAINNET_PI_HOSTNAMES)}.includes(hostname);
         const isSandbox = !inPiBrowser && !isMainnetHost;
 
-        // Initialize Pi SDK immediately when script loads (not on window.load)
-        // This ensures Pi.init() is called before any authenticate() calls
-        // IMPORTANT: This is the ONLY place Pi.init() should be called
+        let attempts = 0;
         (function initPiSdk() {
-          if (window.Pi) {
+          const pi = window.Pi;
+          if (!pi) {
+            // Not loaded yet: try again shortly, for up to 10s
+            if (attempts++ < 200) setTimeout(initPiSdk, 50);
+            return;
+          }
+          if (pi.__avanteInit === true || window.__piInitializedInstance === pi) return;
+          try {
             console.log("🔧 Pi SDK Init:", { hostname, inPiBrowser, isMainnetHost, sandbox: isSandbox });
-            Pi.init({
-              version: "2.0",
-              sandbox: isSandbox,
-            });
+            pi.init({ version: "2.0", sandbox: isSandbox });
+            try {
+              Object.defineProperty(pi, "__avanteInit", { value: true, configurable: true });
+            } catch (markError) {
+              // A frozen object: window.__piInitializedInstance still says so
+            }
+            window.__piInitializedInstance = pi;
             window.__piInitialized = true;
             window.__piSandboxMode = isSandbox;
-          } else {
-            // Retry after a short delay if SDK isn't ready yet
-            setTimeout(initPiSdk, 50);
+          } catch (initError) {
+            console.warn("Pi SDK init failed:", initError);
           }
         })();
       })();

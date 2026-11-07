@@ -3,7 +3,12 @@ import { Helmet } from 'react-helmet-async';
 import { toast } from 'sonner';
 import AppLayout from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
-import { isPiBrowser } from '@/utils/piNetwork';
+import {
+  getNativeFeaturesList,
+  isPiBrowser,
+  isPiInstanceInitialized,
+  withPiInit,
+} from '@/utils/piNetwork';
 
 // What this page uses of the Pi SDK. window.Pi is typed any in global.d.ts
 interface PiDiagnosticsApi {
@@ -51,7 +56,7 @@ const flag = (value: unknown) =>
 function readPiSdk(): Row[] {
   const w = window as unknown as PiSdkWindow;
   const instanceInitialised = w.Pi
-    ? w.Pi.__avanteInit === true || w.__piInitializedInstance === w.Pi
+    ? isPiInstanceInitialized(w.Pi)
       ? 'yes'
       : 'no'
     : 'no window.Pi';
@@ -81,7 +86,7 @@ async function runChecks(): Promise<Row[]> {
   let features = NOT_AVAILABLE;
   if (pi?.nativeFeaturesList) {
     try {
-      features = describe(await withTimeout(pi.nativeFeaturesList(), 5_000));
+      features = describe(await withTimeout(getNativeFeaturesList(), 5_000));
     } catch (error) {
       features = errorText(error);
     }
@@ -238,7 +243,10 @@ const Diagnostics = () => {
       setRow(
         "Pi requestPermission('notifications')",
         describe(
-          await withTimeout(pi.requestPermission('notifications'), 30_000),
+          await withTimeout(
+            withPiInit(() => pi.requestPermission!('notifications')),
+            30_000,
+          ),
         ),
       );
     } catch (error) {
@@ -248,7 +256,8 @@ const Diagnostics = () => {
     }
   };
 
-  // Calls Pi.nativeFeaturesList() on the current window.Pi and shows what came back, or the error
+  // Calls Pi.nativeFeaturesList() the way the app calls the SDK (initialising the current
+  // window.Pi first if it isn't, and once more on "not initialized"), and shows the result
   const testPiSdk = async () => {
     setBusy('sdk');
     try {
@@ -257,7 +266,7 @@ const Diagnostics = () => {
         setSdkTest(NOT_AVAILABLE);
         return;
       }
-      setSdkTest(describe(await withTimeout(pi.nativeFeaturesList(), 10_000)));
+      setSdkTest(describe(await withTimeout(getNativeFeaturesList(), 10_000)));
     } catch (error) {
       setSdkTest(errorText(error));
     } finally {
@@ -283,7 +292,7 @@ const Diagnostics = () => {
     try {
       const pi = getPi();
       if (!pi?.copyText) throw new Error(NOT_AVAILABLE);
-      await pi.copyText(text);
+      await withPiInit(() => pi.copyText!(text));
       toast.success('Copied');
     } catch (error) {
       toast.error(
