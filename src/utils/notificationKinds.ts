@@ -77,7 +77,7 @@ const KINDS: Record<NotificationKind, KindConfig> = {
     tint: 'primary',
     defaultAction: 'View certification',
   },
-  new_review: { icon: Star, tint: 'primary', defaultAction: 'Reply to review' },
+  new_review: { icon: Star, tint: 'primary', defaultAction: 'See review' },
   topup_received: {
     icon: Wallet,
     tint: 'primary',
