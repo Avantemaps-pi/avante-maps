@@ -35,6 +35,39 @@ const describe = (value: unknown) =>
 const errorText = (error: unknown) =>
   `error: ${error instanceof Error ? error.message : String(error)}`;
 
+// The Pi SDK's state, read when the page opens (before any check here calls the SDK). The
+// per-instance marker is set on window.Pi itself when we call Pi.init() on that object, so a
+// replaced window.Pi (a reloaded pi-sdk.js) reads "no" even while the page flags say initialised
+interface PiSdkWindow {
+  Pi?: { __avanteInit?: boolean; nativeFeaturesList?: () => Promise<unknown> };
+  __piSandboxMode?: boolean;
+  __piInitialized?: boolean;
+  __piInitializedInstance?: unknown;
+}
+
+const flag = (value: unknown) =>
+  typeof value === 'boolean' ? String(value) : 'not set';
+
+function readPiSdk(): Row[] {
+  const w = window as unknown as PiSdkWindow;
+  const instanceInitialised = w.Pi
+    ? w.Pi.__avanteInit === true || w.__piInitializedInstance === w.Pi
+      ? 'yes'
+      : 'no'
+    : 'no window.Pi';
+  return [
+    { label: 'Pi SDK: Pi Browser (user agent)', value: isPiBrowser() ? 'yes' : 'no' },
+    { label: 'Pi SDK: hostname', value: window.location.hostname },
+    { label: 'Pi SDK: sandbox used by init', value: flag(w.__piSandboxMode) },
+    { label: 'Pi SDK: window.__piInitialized', value: flag(w.__piInitialized) },
+    { label: 'Pi SDK: this window.Pi initialised by us', value: instanceInitialised },
+    {
+      label: 'Pi SDK: pi-sdk.js script tags',
+      value: String(document.querySelectorAll('script[src*="sdk.minepi.com/pi-sdk.js"]').length),
+    },
+  ];
+}
+
 // Checks that don't need a tap. Each one is guarded, so a missing API reads "not available"
 async function runChecks(): Promise<Row[]> {
   const pi = getPi();
@@ -140,10 +173,14 @@ async function showTestNotification(): Promise<string> {
 
 const Diagnostics = () => {
   const [rows, setRows] = useState<Row[]>([]);
+  const [sdkRows, setSdkRows] = useState<Row[]>([]);
+  const [sdkTest, setSdkTest] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   // After mount: none of this exists during the server render
   useEffect(() => {
+    // First, before the checks below use the SDK
+    setSdkRows(readPiSdk());
     let cancelled = false;
     void runChecks().then((checked) => {
       if (!cancelled)
@@ -211,8 +248,31 @@ const Diagnostics = () => {
     }
   };
 
+  // Calls Pi.nativeFeaturesList() on the current window.Pi and shows what came back, or the error
+  const testPiSdk = async () => {
+    setBusy('sdk');
+    try {
+      const pi = (window as unknown as PiSdkWindow).Pi;
+      if (!pi?.nativeFeaturesList) {
+        setSdkTest(NOT_AVAILABLE);
+        return;
+      }
+      setSdkTest(describe(await withTimeout(pi.nativeFeaturesList(), 10_000)));
+    } catch (error) {
+      setSdkTest(errorText(error));
+    } finally {
+      setSdkRows(readPiSdk());
+      setBusy(null);
+    }
+  };
+
+  const sdkResultRows: Row[] = [
+    ...sdkRows,
+    ...(sdkTest !== null ? [{ label: 'Pi SDK: Test Pi SDK', value: sdkTest }] : []),
+  ];
+
   const copyResults = async () => {
-    const text = rows.map((row) => `${row.label}: ${row.value}`).join('\n');
+    const text = [...sdkResultRows, ...rows].map((row) => `${row.label}: ${row.value}`).join('\n');
     try {
       await navigator.clipboard.writeText(text);
       toast.success('Copied');
@@ -243,9 +303,35 @@ const Diagnostics = () => {
         aria-labelledby="page-title"
       >
         <p className="text-sm text-muted-foreground">
-          What this browser supports for notifications. Nothing personal is
-          shown.
+          What this browser supports for notifications, and the Pi SDK's state.
+          Nothing personal is shown.
         </p>
+        <section aria-labelledby="pi-sdk-heading" className="space-y-2">
+          <h2 id="pi-sdk-heading" className="text-base font-semibold">
+            Pi SDK
+          </h2>
+          <dl
+            className="divide-y divide-border rounded-xl border bg-card text-sm text-card-foreground"
+            aria-busy={sdkRows.length === 0}
+          >
+            {sdkResultRows.map((row) => (
+              <div key={row.label} className="grid gap-1 px-3 py-2.5" data-row={row.label}>
+                <dt className="font-medium">{row.label.replace('Pi SDK: ', '')}</dt>
+                <dd className="break-all font-mono text-muted-foreground">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full"
+            onClick={() => void testPiSdk()}
+            disabled={busy !== null}
+          >
+            Test Pi SDK
+          </Button>
+        </section>
+        <h2 className="text-base font-semibold">Notifications</h2>
         <dl
           className="divide-y divide-border rounded-xl border bg-card text-sm text-card-foreground"
           aria-busy={rows.length === 0}
