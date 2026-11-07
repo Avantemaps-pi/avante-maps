@@ -32,6 +32,15 @@ const PaymentRequestSchema = z.object({
   }).strict()
 });
 
+const PAYMENT_USER_MISMATCH = {
+  success: false,
+  error_code: 'payment_user_mismatch',
+  message: "This payment was started from a different Pi account. Sign in with the account you're paying from.",
+};
+
+// Pi uids in logs: enough to tell them apart, never the whole value
+const shortUid = (uid: unknown) => (typeof uid === 'string' && uid ? `${uid.slice(0, 6)}…` : null);
+
 // Subscription tier assignment is intentionally NOT performed here.
 // See `complete-payment` — tier upgrades only occur after the on-chain
 // payment is verified completed, to prevent free subscription grants via
@@ -257,32 +266,95 @@ Deno.serve(async (req) => {
     // payment to both. A retry may send different metadata from the first attempt's row
     let approvedPlanFields: { approved_amount_pi: number; metadata: typeof paymentRequest.metadata } | null = null;
 
-    if (expectedPlanPi !== null) {
-      // The amount the user would sign, from Pi, never from the request body
-      let piAmount: number | null = null;
+    // Cancels the payment at Pi and marks the row, for a payment that mustn't be approved
+    const cancelAtPi = async (error: string) => {
       try {
-        const piGetResp = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}`, {
-          method: 'GET',
+        const cancelResponse = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}/cancel`, {
+          method: 'POST',
           headers: {
             'Authorization': `Key ${piApiKey}`,
             'Content-Type': 'application/json',
           },
         });
-        if (piGetResp.ok) {
-          const piPayment = await piGetResp.json();
-          const amt = Number(piPayment?.amount);
-          if (Number.isFinite(amt) && amt > 0) piAmount = amt;
-        } else {
-          log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', status: piGetResp.status });
+        if (!cancelResponse.ok) {
+          log.warn(`${FN}.pi_api.cancel_failed`, { stage: 'pi_api', status: cancelResponse.status });
         }
-      } catch (getErr) {
-        log.warn(`${FN}.pi_api.get_payment_exception`, {
+      } catch (cancelError) {
+        log.warn(`${FN}.pi_api.cancel_exception`, {
           stage: 'pi_api',
-          message: getErr instanceof Error ? getErr.message : String(getErr),
+          message: cancelError instanceof Error ? cancelError.message : String(cancelError),
         });
       }
+      await supabaseClient.from('payments').update({
+        status: {
+          approved: false,
+          verified: false,
+          completed: false,
+          cancelled: true,
+          error,
+        },
+        updated_at: new Date().toISOString(),
+      }).eq('payment_id', paymentRequest.paymentId);
+      log.transition('pending', 'cancelled', { terminalReason: 'cancelled', source: error });
+    };
 
-      // Left pending, so approving again can still work
+    // The payment as Pi has it, for every kind: who is paying, and (for a plan) the amount the user
+    // would sign. Never from the request body
+    let piAmount: number | null = null;
+    let piUserUid: string | null = null;
+    let piFetched = false;
+    try {
+      const piGetResp = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Key ${piApiKey}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (piGetResp.ok) {
+        const piPayment = await piGetResp.json();
+        piFetched = true;
+        const amt = Number(piPayment?.amount);
+        if (Number.isFinite(amt) && amt > 0) piAmount = amt;
+        piUserUid = typeof piPayment?.user_uid === 'string' && piPayment.user_uid ? piPayment.user_uid : null;
+      } else {
+        log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', status: piGetResp.status });
+      }
+    } catch (getErr) {
+      log.warn(`${FN}.pi_api.get_payment_exception`, {
+        stage: 'pi_api',
+        message: getErr instanceof Error ? getErr.message : String(getErr),
+      });
+    }
+
+    // Left pending, so approving again can still work
+    if (!piFetched) {
+      log.error(`${FN}.verify.payment_unavailable`, { stage: 'pi_api' });
+      return respond({ success: false, message: 'Unable to verify payment' }, 502);
+    }
+
+    // The Pi account paying must be the signed-in user's
+    const { data: payer, error: payerError } = await supabaseClient
+      .from('users')
+      .select('pi_uid')
+      .eq('id', paymentRequest.userId)
+      .maybeSingle();
+    if (payerError) {
+      log.error(`${FN}.verify.user_lookup_error`, { stage: 'lookup', code: payerError.code });
+      return respond({ success: false, message: 'Payment processing failed. Please try again.' }, 500);
+    }
+    const signedInPiUid = payer?.pi_uid ?? null;
+    if (!signedInPiUid || !piUserUid || signedInPiUid !== piUserUid) {
+      log.error(`${FN}.verify.payment_user_mismatch`, {
+        stage: 'validation',
+        piUserUid: shortUid(piUserUid),
+        signedInPiUid: shortUid(signedInPiUid),
+      });
+      await cancelAtPi('payment_user_mismatch');
+      return respond({ ...PAYMENT_USER_MISMATCH, paymentId: paymentRequest.paymentId }, 403);
+    }
+
+    if (expectedPlanPi !== null) {
       if (piAmount === null) {
         log.error(`${FN}.verify.amount_unavailable`, { stage: 'pi_api' });
         return respond({ success: false, message: 'Unable to verify payment amount' }, 502);
@@ -290,36 +362,7 @@ Deno.serve(async (req) => {
 
       if (piAmount < expectedPlanPi * AMOUNT_TOLERANCE) {
         log.warn(`${FN}.verify.amount_mismatch`, { stage: 'validation', piAmount, expectedPi: expectedPlanPi });
-        try {
-          const cancelResponse = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}/cancel`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Key ${piApiKey}`,
-              'Content-Type': 'application/json',
-            },
-          });
-          if (!cancelResponse.ok) {
-            log.warn(`${FN}.pi_api.cancel_failed`, { stage: 'pi_api', status: cancelResponse.status });
-          }
-        } catch (cancelError) {
-          log.warn(`${FN}.pi_api.cancel_exception`, {
-            stage: 'pi_api',
-            message: cancelError instanceof Error ? cancelError.message : String(cancelError),
-          });
-        }
-
-        await supabaseClient.from('payments').update({
-          status: {
-            approved: false,
-            verified: false,
-            completed: false,
-            cancelled: true,
-            error: 'amount_mismatch',
-          },
-          updated_at: new Date().toISOString(),
-        }).eq('payment_id', paymentRequest.paymentId);
-        log.transition('pending', 'cancelled', { terminalReason: 'cancelled', source: 'amount_mismatch' });
-
+        await cancelAtPi('amount_mismatch');
         return respond({
           success: false,
           error_code: 'amount_mismatch',
