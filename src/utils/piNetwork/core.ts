@@ -4,7 +4,7 @@
  */
 
 import type { AuthResult, PaymentDTO, PaymentCallbacks, PaymentData, Scope } from './types';
-import { isMainnetPiHost } from '@/config/environment';
+import { isPiBrowserUserAgent, shouldUsePiSandbox } from '@/config/environment';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State Machine
@@ -65,21 +65,14 @@ const loadPiSdk = (): Promise<void> => {
 // ─────────────────────────────────────────────────────────────────────────────
 export const isPiBrowser = (): boolean => {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
-  const ua = navigator.userAgent.toLowerCase();
-  return ua.includes('pibrowser') || ua.includes('pi browser') || ua.includes('minepi');
+  return isPiBrowserUserAgent(navigator.userAgent);
 };
 
+// Sandbox only outside the Pi Browser on non-mainnet hosts: the rule in src/config/environment.ts,
+// the same one PI_INIT_SCRIPT inlines
 export const determineSandboxMode = (): boolean => {
-  if (typeof window === 'undefined') return true;
-  
-  // Check if index.html already set the sandbox mode
-  if (typeof (window as any).__piSandboxMode === 'boolean') {
-    return (window as any).__piSandboxMode;
-  }
-  
-  // Fallback: only the exact mainnet hostnames use sandbox: false (single source of
-  // truth in src/config/environment.ts — keep in sync with __root.tsx's PI_INIT_SCRIPT).
-  return !isMainnetPiHost(window.location.hostname);
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return true;
+  return shouldUsePiSandbox(window.location.hostname, navigator.userAgent);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

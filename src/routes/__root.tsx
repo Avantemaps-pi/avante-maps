@@ -24,20 +24,20 @@ import { initializePiNetwork } from "@/utils/piNetwork";
 import { prefetchHighPriorityRoutes } from "@/lib/routePrefetch";
 import { markAppHydrated } from "@/utils/hydrationSignal";
 import { reportLovableError } from "@/lib/lovable-error-reporting";
-import { MAINNET_PI_HOSTNAMES } from "@/config/environment";
+import { MAINNET_PI_HOSTNAMES, PI_BROWSER_UA_MARKERS } from "@/config/environment";
 
 import appCss from "../styles.css?url";
 import heroIcon72 from "@/assets/avante-icon-72.webp";
 import heroIcon144 from "@/assets/avante-icon-144.webp";
 
-// Preserved verbatim from the Classic index.html — Pi SDK is initialized exactly
-// ONCE here; sandbox is FALSE only on the exact mainnet hostnames below.
+// Pi SDK init, before the JS bundle loads. Sandbox follows shouldUsePiSandbox() in
+// src/config/environment.ts: false inside the Pi Browser (any hostname) and on the mainnet
+// hostnames, true only outside the Pi Browser elsewhere (desktop testing in Pi's sandbox).
 //
-// Hostname list is interpolated at build time from MAINNET_PI_HOSTNAMES
-// (src/config/environment.ts) — the single source of truth also used by
-// src/utils/piNetwork/core.ts's determineSandboxMode() fallback. This script itself
-// stays a raw inline string (it must run before the JS bundle loads, so it can't
-// import that constant at runtime) — do not hardcode a second hostname list here.
+// The hostname list and the Pi Browser user-agent markers are interpolated at build time from
+// MAINNET_PI_HOSTNAMES and PI_BROWSER_UA_MARKERS (src/config/environment.ts), the single source
+// of truth also used by src/utils/piNetwork/core.ts. This script stays a raw inline string (it
+// must run before the bundle, so it can't import them at runtime): never hardcode a second list.
 const PI_INIT_SCRIPT = `
       // Wrapped in an IIFE so nothing is declared at the top level: the router can
       // re-insert head scripts on client-side navigation, and a second top-level
@@ -46,20 +46,23 @@ const PI_INIT_SCRIPT = `
         if (window.__piInitScriptRan) return;
         window.__piInitScriptRan = true;
 
-        // Sandbox detection: ONLY the exact mainnet hostnames below use sandbox: false.
-        // Every other hostname (localhost, preview, testnet.avantemaps.com, etc.) uses
-        // sandbox: true. Exact-match only — a suffix/endsWith check previously and
-        // incorrectly classified testnet.avantemaps.com as mainnet.
+        // Sandbox only outside the Pi Browser on a non-mainnet host (desktop testing in Pi's
+        // sandbox). Inside the Pi Browser, on any hostname, and on the exact mainnet hostnames:
+        // false. Exact-match hostnames only: a suffix check once classified testnet as mainnet.
         const hostname = window.location.hostname;
+        const userAgent = (navigator.userAgent || "").toLowerCase();
+        const inPiBrowser = ${JSON.stringify(PI_BROWSER_UA_MARKERS)}.some(function (marker) {
+          return userAgent.indexOf(marker) !== -1;
+        });
         const isMainnetHost = ${JSON.stringify(MAINNET_PI_HOSTNAMES)}.includes(hostname);
-        const isSandbox = !isMainnetHost;
+        const isSandbox = !inPiBrowser && !isMainnetHost;
 
         // Initialize Pi SDK immediately when script loads (not on window.load)
         // This ensures Pi.init() is called before any authenticate() calls
         // IMPORTANT: This is the ONLY place Pi.init() should be called
         (function initPiSdk() {
           if (window.Pi) {
-            console.log("🔧 Pi SDK Init:", { hostname, isMainnetHost, sandbox: isSandbox });
+            console.log("🔧 Pi SDK Init:", { hostname, inPiBrowser, isMainnetHost, sandbox: isSandbox });
             Pi.init({
               version: "2.0",
               sandbox: isSandbox,

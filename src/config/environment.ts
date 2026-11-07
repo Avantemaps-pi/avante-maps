@@ -26,6 +26,27 @@ export const MAINNET_PI_HOSTNAMES = ['avantemaps.com', 'mainnet.avantemaps.com']
 export const isMainnetPiHost = (hostname: string): boolean =>
   (MAINNET_PI_HOSTNAMES as readonly string[]).includes(hostname);
 
+/**
+ * What the Pi Browser puts in its user agent (matched lower-cased). The SDK loads window.Pi in
+ * every browser, so the user agent is the only way to tell. Single list, interpolated into
+ * PI_INIT_SCRIPT like MAINNET_PI_HOSTNAMES.
+ */
+export const PI_BROWSER_UA_MARKERS = ['pibrowser', 'pi browser', 'minepi'] as const;
+
+export const isPiBrowserUserAgent = (userAgent: string): boolean => {
+  const ua = userAgent.toLowerCase();
+  return PI_BROWSER_UA_MARKERS.some((marker) => ua.includes(marker));
+};
+
+/**
+ * Whether Pi.init() runs with sandbox: true. Pi's sandbox flag is for running the app in Pi's
+ * desktop sandbox (sandbox.minepi.com); inside the Pi Browser (the testnet or mainnet app, on any
+ * hostname) it must be false, as on the mainnet hostnames. So: true only outside the Pi Browser on
+ * a non-mainnet host (desktop testing). The same rule is inlined in PI_INIT_SCRIPT.
+ */
+export const shouldUsePiSandbox = (hostname: string, userAgent: string): boolean =>
+  !isPiBrowserUserAgent(userAgent) && !isMainnetPiHost(hostname);
+
 // Build-time security check: Ensure auth bypass is never enabled in production builds
 if (import.meta.env.PROD) {
   const authBypassEnabled = import.meta.env.DEV; // Should always be false in PROD
