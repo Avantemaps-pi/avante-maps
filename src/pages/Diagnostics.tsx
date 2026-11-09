@@ -66,12 +66,17 @@ function readPiSdk(): Row[] {
     { label: 'Pi SDK: sandbox used by init', value: flag(w.__piSandboxMode) },
     { label: 'Pi SDK: window.__piInitialized', value: flag(w.__piInitialized) },
     { label: 'Pi SDK: this window.Pi initialised by us', value: instanceInitialised },
-    {
-      label: 'Pi SDK: pi-sdk.js script tags',
-      value: String(document.querySelectorAll('script[src*="sdk.minepi.com/pi-sdk.js"]').length),
-    },
+    scriptTagsRow(),
   ];
 }
+
+// Kept current while the page is open. The server's HTML has one, and the SDK runs while the page
+// loads; hydration can then take the head's script tags out, so 0 is normal after that. 2 or more
+// would mean a second pi-sdk.js was added (which replaces window.Pi)
+const scriptTagsRow = (): Row => ({
+  label: 'Pi SDK: pi-sdk.js script tags now',
+  value: String(document.querySelectorAll('script[src*="sdk.minepi.com/pi-sdk.js"]').length),
+});
 
 // Checks that don't need a tap. Each one is guarded, so a missing API reads "not available"
 async function runChecks(): Promise<Row[]> {
@@ -186,6 +191,18 @@ const Diagnostics = () => {
   useEffect(() => {
     // First, before the checks below use the SDK
     setSdkRows(readPiSdk());
+    // Only the script count is read again: the rest is the state the page opened with
+    const recount = () =>
+      setSdkRows((current) =>
+        current.map((row) => (row.label === 'Pi SDK: pi-sdk.js script tags now' ? scriptTagsRow() : row)),
+      );
+    // The whole document: the head itself can be swapped during hydration. Only script changes count
+    const isScript = (node: Node) => node.nodeName === 'SCRIPT';
+    const scriptWatch = new MutationObserver((records) => {
+      if (records.some((r) => [...r.addedNodes, ...r.removedNodes].some(isScript))) recount();
+    });
+    scriptWatch.observe(document.documentElement, { childList: true, subtree: true });
+    recount();
     let cancelled = false;
     void runChecks().then((checked) => {
       if (!cancelled)
@@ -198,6 +215,7 @@ const Diagnostics = () => {
     });
     return () => {
       cancelled = true;
+      scriptWatch.disconnect();
     };
   }, []);
 
