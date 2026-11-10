@@ -5,6 +5,7 @@
 
 import type { AuthResult, PaymentDTO, PaymentCallbacks, PaymentData, Scope } from './types';
 import { isPiBrowserUserAgent, shouldUsePiSandbox } from '@/config/environment';
+import { handleIncompletePayment } from './incompletePayment';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // State Machine
@@ -13,7 +14,11 @@ let sdkLoaded = false;
 let initInFlight: Promise<boolean> | null = null;
 let sandboxMode = false;
 let cachedAuth: AuthResult | null = null;
-let incompletePaymentHandler: ((payment: PaymentDTO) => void) | null = null;
+// Registered once, here where the SDK code loads: an unfinished payment Pi reports (from
+// authenticate or createPayment) is completed or cancelled, or the user is told what to do
+let incompletePaymentHandler: ((payment: PaymentDTO) => void) | null = (payment) => {
+  void handleIncompletePayment(payment);
+};
 
 // The last auth result, kept for display and its access token (AuthProvider reads accessToken).
 // It is NOT the SDK's state: Pi grants scopes to the SDK object of the current page load, so a
@@ -286,7 +291,7 @@ export const authenticate = async (scopes: Scope[] = ['username', 'payments']): 
   // The object the scopes are granted to (a retry re-inits the same one)
   const pi = window.Pi;
   const result = await withPiInit(() =>
-    window.Pi.authenticate(scopes, (uuid: string) => uuid),
+    window.Pi.authenticate(scopes, (payment: PaymentDTO) => incompletePaymentHandler?.(payment)),
   );
   recordInstanceScopes(pi, scopes);
   
