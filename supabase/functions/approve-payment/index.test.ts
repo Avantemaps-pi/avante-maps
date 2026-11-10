@@ -269,3 +269,34 @@ test('logs never hold a whole Pi uid', async () => {
   assert(!output.includes(OWNER_PI_UID), output);
   assert(output.includes('pi-uid…'));
 });
+
+// The app sends x-lifecycle-id and x-correlation-id (src/utils/correlation.ts); if the preflight
+// doesn't allow them the browser never sends the POST and approval times out
+test('OPTIONS allows the correlation headers the app sends', async () => {
+  const res = await handler(
+    new Request('http://fn/approve-payment', { method: 'OPTIONS' }),
+  );
+  assertEquals(res.status, 200);
+  const allowed = (res.headers.get('access-control-allow-headers') ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase());
+  for (const header of [
+    'x-lifecycle-id',
+    'x-correlation-id',
+    'x-request-id',
+    'x-trace-id',
+  ]) {
+    assert(
+      allowed.includes(header),
+      `${header} is not in Access-Control-Allow-Headers`,
+    );
+  }
+  for (const header of [
+    'authorization',
+    'x-client-info',
+    'apikey',
+    'content-type',
+  ]) {
+    assert(allowed.includes(header), `${header} is no longer allowed`);
+  }
+});
