@@ -377,7 +377,8 @@ export async function executeWalletTopUp(
     };
     lcEmit('info', `${FN_LC}.lifecycle.start`, 'validation');
 
-    return new Promise<PaymentResult>((resolve) => {
+    // Awaited, so the lock is held until the payment finishes (not just until it starts)
+    return await new Promise<PaymentResult>((resolve) => {
       const callbacks: PaymentCallbacks = {
         onReadyForServerApproval: async (paymentId: string) => {
           lcEmit('info', `${FN_LC}.approve.start`, 'pi_api', { paymentId });
@@ -391,6 +392,15 @@ export async function executeWalletTopUp(
               paymentId,
               success: approvalResult.success,
             });
+            // Refused (e.g. payment_user_mismatch): the server's message, not a silent wait
+            if (!approvalResult.success) {
+              resolve({
+                success: false,
+                message: approvalResult.message || 'The payment could not be approved',
+                paymentId,
+                ...(approvalResult.error_code ? { errorCode: approvalResult.error_code } : {}),
+              });
+            }
           } catch (error) {
             lcEmit('error', `${FN_LC}.approve.exception`, 'error', {
               paymentId,
@@ -416,6 +426,16 @@ export async function executeWalletTopUp(
               success: completionResult.success,
               terminalReason: completionResult.success ? 'completed' : 'error',
             });
+            // Only a completion the server confirms is a success: a 403, 500 or 502 shows its message
+            if (!completionResult.success) {
+              resolve({
+                success: false,
+                message: completionResult.message || 'The top up could not be completed',
+                paymentId,
+                ...(completionResult.error_code ? { errorCode: completionResult.error_code } : {}),
+              });
+              return;
+            }
             // The authoritative balance is refetched by the UI via
             // get_wallet_balance — we deliberately ignore any inline balance
             // value returned by the completion response.

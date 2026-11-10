@@ -3,6 +3,8 @@
  * Clean, safe utilities used by core.ts
  */
 
+import { initPiInstanceIfNeeded } from './core';
+
 declare global {
   interface Window {
     Pi?: any;
@@ -88,7 +90,9 @@ export const isPiNetworkAvailable = (): boolean => {
     if (!pi) return false;
 
     const hasAuthMethod = typeof pi.authenticate === "function";
-    const isInit = !!(window as any).__piInitialized;
+    // The current window.Pi must be initialised (a reloaded SDK replaces it with a new,
+    // uninitialised object). Login calls Pi.authenticate() right after this check, so init it now
+    const isInit = initPiInstanceIfNeeded();
 
     return hasAuthMethod && isInit;
   } catch {

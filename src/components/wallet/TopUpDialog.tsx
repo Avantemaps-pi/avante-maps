@@ -19,10 +19,11 @@ import { executeWalletTopUp } from '@/utils/piPayment';
 const MIN_TOP_UP_PI = 1;
 
 interface TopUpDialogProps {
-  onSuccess: () => void;
+  /** After any result: refreshes the balance and activity */
+  onDone: () => void;
 }
 
-const TopUpDialog: React.FC<TopUpDialogProps> = ({ onSuccess }) => {
+const TopUpDialog: React.FC<TopUpDialogProps> = ({ onDone }) => {
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState('10');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -44,10 +45,10 @@ const TopUpDialog: React.FC<TopUpDialogProps> = ({ onSuccess }) => {
         },
       });
 
+      // The server's own message either way: a refused or failed top up never reads as a success
       if (result.success) {
         toast.success(result.message);
         setOpen(false);
-        onSuccess();
       } else {
         toast.error(result.message);
       }
@@ -59,6 +60,8 @@ const TopUpDialog: React.FC<TopUpDialogProps> = ({ onSuccess }) => {
       );
     } finally {
       setIsProcessing(false);
+      // The balance may have changed whatever the result (a credit can land after an error)
+      onDone();
     }
   };
 

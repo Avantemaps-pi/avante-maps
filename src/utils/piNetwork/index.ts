@@ -6,6 +6,10 @@
 // Export core SDK functionality
 export { 
   initializePiNetwork, 
+  ensurePiInitialized,
+  withPiInit,
+  getNativeFeaturesList,
+  isPiInstanceInitialized,
   isSdkInitialized, 
   requestUserPermissions, 
   forceSdkReinitialization, 
