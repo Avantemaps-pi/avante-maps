@@ -4,7 +4,10 @@ import { toast } from 'sonner';
 import AppLayout from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import {
+  ensurePiPaymentsAuth,
+  getLastIncompletePayment,
   getNativeFeaturesList,
+  hasPaymentsAuth,
   isPiBrowser,
   isPiInstanceInitialized,
   withPiInit,
@@ -66,9 +69,25 @@ function readPiSdk(): Row[] {
     { label: 'Pi SDK: sandbox used by init', value: flag(w.__piSandboxMode) },
     { label: 'Pi SDK: window.__piInitialized', value: flag(w.__piInitialized) },
     { label: 'Pi SDK: this window.Pi initialised by us', value: instanceInitialised },
+    {
+      label: 'Pi SDK: this window.Pi authenticated with payments',
+      value: w.Pi ? (hasPaymentsAuth(w.Pi) ? 'yes' : 'no') : 'no window.Pi',
+    },
+    incompletePaymentRow(),
     scriptTagsRow(),
   ];
 }
+
+// What Pi last reported as unfinished on this page (when Pi.authenticate or createPayment ran)
+const incompletePaymentRow = (): Row => {
+  const seen = getLastIncompletePayment();
+  return {
+    label: 'Pi SDK: unfinished payment reported by Pi',
+    value: seen
+      ? `${seen.paymentId} (${seen.hasTxid ? 'has a transaction' : 'no transaction'}; ${seen.outcome})`
+      : 'none reported',
+  };
+};
 
 // Kept current while the page is open. The server's HTML has one, and the SDK runs while the page
 // loads; hydration can then take the head's script tags out, so 0 is normal after that. 2 or more
@@ -185,6 +204,7 @@ const Diagnostics = () => {
   const [rows, setRows] = useState<Row[]>([]);
   const [sdkRows, setSdkRows] = useState<Row[]>([]);
   const [sdkTest, setSdkTest] = useState<string | null>(null);
+  const [sdkAuth, setSdkAuth] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   // After mount: none of this exists during the server render
@@ -293,9 +313,27 @@ const Diagnostics = () => {
     }
   };
 
+  // Authenticates the current window.Pi with the payment scopes (silent if the user already agreed),
+  // and shows the scopes it has, or the error. Pi reports an unfinished payment while doing this
+  const authenticateForPayments = async () => {
+    setBusy('auth');
+    try {
+      const scopes = await withTimeout(ensurePiPaymentsAuth(), 60_000);
+      setSdkAuth(scopes.length > 0 ? scopes.join(', ') : 'no scopes');
+    } catch (error) {
+      setSdkAuth(errorText(error));
+    } finally {
+      // The handler for an unfinished payment runs after authenticate resolves: read it a moment later
+      window.setTimeout(() => setSdkRows(readPiSdk()), 500);
+      setSdkRows(readPiSdk());
+      setBusy(null);
+    }
+  };
+
   const sdkResultRows: Row[] = [
     ...sdkRows,
     ...(sdkTest !== null ? [{ label: 'Pi SDK: Test Pi SDK', value: sdkTest }] : []),
+    ...(sdkAuth !== null ? [{ label: 'Pi SDK: Authenticate for payments', value: sdkAuth }] : []),
   ];
 
   const copyResults = async () => {
@@ -356,6 +394,15 @@ const Diagnostics = () => {
             disabled={busy !== null}
           >
             Test Pi SDK
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full"
+            onClick={() => void authenticateForPayments()}
+            disabled={busy !== null}
+          >
+            Authenticate for payments
           </Button>
         </section>
         <h2 className="text-base font-semibold">Notifications</h2>
