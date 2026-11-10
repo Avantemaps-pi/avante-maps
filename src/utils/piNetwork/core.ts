@@ -15,6 +15,9 @@ let sandboxMode = false;
 let cachedAuth: AuthResult | null = null;
 let incompletePaymentHandler: ((payment: PaymentDTO) => void) | null = null;
 
+// The last auth result, kept for display and its access token (AuthProvider reads accessToken).
+// It is NOT the SDK's state: Pi grants scopes to the SDK object of the current page load, so a
+// result from an earlier load never means the current window.Pi may create payments
 const AUTH_STORAGE_KEY = 'pi_auth_result';
 const SDK_URL = 'https://sdk.minepi.com/pi-sdk.js';
 
@@ -87,6 +90,9 @@ interface PiInitWindow {
   __piInitialized?: boolean;
   __piSandboxMode?: boolean;
   __piInitializedInstance?: unknown;
+  /** Fallback for an SDK object that can't take a property: the object and its granted scopes */
+  __piScopesInstance?: unknown;
+  __piScopes?: Scope[];
 }
 const piWindow = (): PiInitWindow => window as unknown as PiInitWindow;
 
@@ -222,6 +228,45 @@ export const getNativeFeaturesList = (): Promise<unknown> =>
   });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Scopes, per SDK instance
+// Pi grants scopes to the SDK object that ran Pi.authenticate(), for this page load. createPayment
+// fails with "Cannot create a payment without \"payments\" scope" on an object that hasn't been
+// authenticated with payments, whatever an earlier load cached. So the granted scopes are a marker
+// on window.Pi itself (__avanteScopes), like the init marker
+// ─────────────────────────────────────────────────────────────────────────────
+export const PAYMENT_SCOPES: Scope[] = ['username', 'payments', 'wallet_address'];
+
+/** The scopes Pi.authenticate() granted to this SDK object (none if it hasn't run on it) */
+export const getInstanceScopes = (pi: unknown = piWindow().Pi): Scope[] => {
+  if (!pi) return [];
+  const marked = (pi as { __avanteScopes?: Scope[] }).__avanteScopes;
+  if (Array.isArray(marked)) return marked;
+  const w = piWindow();
+  return w.__piScopesInstance === pi && Array.isArray(w.__piScopes) ? w.__piScopes : [];
+};
+
+const recordInstanceScopes = (pi: unknown, scopes: Scope[]) => {
+  if (!pi) return;
+  const granted = [...new Set([...getInstanceScopes(pi), ...scopes])];
+  try {
+    Object.defineProperty(pi, '__avanteScopes', { value: granted, configurable: true, writable: true });
+  } catch {
+    // A frozen object: the window fallback below still says so
+  }
+  const w = piWindow();
+  w.__piScopesInstance = pi;
+  w.__piScopes = granted;
+};
+
+/** Whether this SDK object has been authenticated with the payments scope this page load */
+export const hasPaymentsAuth = (pi: unknown = piWindow().Pi): boolean => getInstanceScopes(pi).includes('payments');
+
+const isScopeError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /scope/i.test(message);
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Authentication Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 export const authenticate = async (scopes: Scope[] = ['username', 'payments']): Promise<AuthResult> => {
@@ -238,9 +283,12 @@ export const authenticate = async (scopes: Scope[] = ['username', 'payments']): 
   if (!window.Pi) throw new Error('Pi SDK not available');
   if (!window.Pi.authenticate) throw new Error('Pi.authenticate not available');
 
+  // The object the scopes are granted to (a retry re-inits the same one)
+  const pi = window.Pi;
   const result = await withPiInit(() =>
     window.Pi.authenticate(scopes, (uuid: string) => uuid),
   );
+  recordInstanceScopes(pi, scopes);
   
   const authResult: AuthResult = {
     accessToken: result.accessToken,
@@ -251,13 +299,23 @@ export const authenticate = async (scopes: Scope[] = ['username', 'payments']): 
     },
   };
 
-  // Cache in memory and localStorage
+  // Cache in memory and localStorage, for display and the access token only (not SDK state)
   cachedAuth = authResult;
   try {
     localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(authResult));
   } catch { /* localStorage unavailable */ }
 
   return authResult;
+};
+
+/**
+ * Authenticates the current SDK object with the payment scopes if it hasn't been this page load.
+ * Silent when the user has already agreed. Returns the scopes it now has
+ */
+export const ensurePiPaymentsAuth = async (): Promise<Scope[]> => {
+  await ensurePiInitialized();
+  if (!hasPaymentsAuth()) await authenticate(PAYMENT_SCOPES);
+  return getInstanceScopes();
 };
 
 export const getCachedAuth = (): AuthResult | null => {
@@ -293,7 +351,8 @@ export const requestUserPermissions = async (scopes: Scope[] = ['username', 'pay
 // Payment Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 // If the SDK says "not initialized" (thrown, or through onError) before the payment exists at
-// Pi, the current window.Pi is initialised and the payment started once more. Never after
+// Pi, the current window.Pi is initialised and the payment started once more. The same for a
+// "scope" error: authenticated with the payment scopes, then once more. Never after
 // onReadyForServerApproval has fired, or when Pi sent a payment with the error: that payment
 // already exists at Pi
 export const createPayment = async (
@@ -305,14 +364,25 @@ export const createPayment = async (
     callbacks.onError(new Error('Pi SDK not available'));
     return null;
   }
+  // Every payment path: this SDK object must have the payments scope (a cached result from an
+  // earlier load doesn't count)
+  await ensurePiPaymentsAuth();
 
   let approvalStarted = false;
   let retried = false;
+  let retriedScope = false;
 
   const retryOnce = () => {
     retried = true;
     console.warn('⚠️ Pi SDK said "not initialized" before the payment existed: initializing and starting it once more');
     initCurrentInstance(true);
+    return start();
+  };
+
+  const retryWithPaymentsScope = async () => {
+    retriedScope = true;
+    console.warn('⚠️ Pi SDK said the payments scope is missing before the payment existed: authenticating and starting it once more');
+    await authenticate(PAYMENT_SCOPES);
     return start();
   };
 
@@ -333,6 +403,12 @@ export const createPayment = async (
           }
           return;
         }
+        if (!approvalStarted && !payment && !retriedScope && isScopeError(error)) {
+          retryWithPaymentsScope().catch((retryError) =>
+            callbacks.onError(retryError instanceof Error ? retryError : new Error(String(retryError))),
+          );
+          return;
+        }
         callbacks.onError(error, payment);
       },
       onIncompletePaymentFound: (payment: PaymentDTO) => {
@@ -344,6 +420,7 @@ export const createPayment = async (
     return start();
   } catch (error) {
     if (!approvalStarted && !retried && isPiNotInitializedError(error)) return retryOnce();
+    if (!approvalStarted && !retriedScope && isScopeError(error)) return retryWithPaymentsScope();
     throw error;
   }
 };
@@ -361,6 +438,7 @@ export const createPiPayment = createPayment;
 export const PiClient = {
   init: initializePiNetwork,
   ensureInitialized: ensurePiInitialized,
+  ensurePaymentsAuth: ensurePiPaymentsAuth,
   authenticate,
   createPayment,
   getCachedAuth,

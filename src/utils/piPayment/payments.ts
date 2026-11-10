@@ -6,6 +6,7 @@
 
 import {
   initializePiNetwork,
+  ensurePiPaymentsAuth,
   createPiPayment,
   getPiAuthResult,
   setIncompletePaymentHandler,
@@ -99,18 +100,17 @@ export async function executeSubscriptionPayment(
     // Ensure SDK is ready
     await initPiForPayments();
     
-    // Try cached auth first; if missing, re-authenticate with Pi SDK
-    let authResult = getPiAuthResult();
-    if (!authResult) {
-      try {
-        const { authenticate } = await import('../piNetwork/core');
-        authResult = await authenticate(['username', 'payments', 'wallet_address']);
-      } catch (authError: any) {
-        return {
-          success: false,
-          message: authError.message || 'Please authenticate with Pi Network first'
-        };
-      }
+    // This SDK object must be authenticated with the payments scope this page load: a cached
+    // result from an earlier load doesn't count. Done here, before the payment starts
+    try {
+      await ensurePiPaymentsAuth();
+    } catch (authError) {
+      return {
+        success: false,
+        message: authError instanceof Error && authError.message
+          ? authError.message
+          : 'Please authenticate with Pi Network first'
+      };
     }
 
     // Get Supabase UUID (not Pi UID) for edge function calls
@@ -324,20 +324,17 @@ export async function executeWalletTopUp(
   try {
     await initPiForPayments();
 
-    // Try cached auth first; if missing, re-authenticate with Pi SDK
-    let authResult = getPiAuthResult();
-    if (!authResult) {
-      try {
-        const { authenticate } = await import('../piNetwork/core');
-        authResult = await authenticate(['username', 'payments', 'wallet_address']);
-      } catch (authError) {
-        return {
-          success: false,
-          message: authError instanceof Error
-            ? authError.message
-            : 'Please authenticate with Pi Network first'
-        };
-      }
+    // This SDK object must be authenticated with the payments scope this page load: a cached
+    // result from an earlier load doesn't count. Done here, before the payment starts
+    try {
+      await ensurePiPaymentsAuth();
+    } catch (authError) {
+      return {
+        success: false,
+        message: authError instanceof Error && authError.message
+          ? authError.message
+          : 'Please authenticate with Pi Network first'
+      };
     }
 
     // Get Supabase UUID (not Pi UID) for edge function calls
