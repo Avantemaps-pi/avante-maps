@@ -30,16 +30,25 @@ export interface IncompletePaymentSeen {
 let lastSeen: IncompletePaymentSeen | null = null;
 const inFlight = new Set<string>();
 
-export const getLastIncompletePayment = (): IncompletePaymentSeen | null => lastSeen;
+export const getLastIncompletePayment = (): IncompletePaymentSeen | null =>
+  lastSeen;
 
 const log = (event: string, fields: Record<string, unknown>) =>
-  console.log(JSON.stringify({ fn: 'client.incompletePayment', event, ...fields }));
+  console.log(
+    JSON.stringify({ fn: 'client.incompletePayment', event, ...fields }),
+  );
 
-const record = (paymentId: string, hasTxid: boolean, outcome: IncompletePaymentSeen['outcome']) => {
+const record = (
+  paymentId: string,
+  hasTxid: boolean,
+  outcome: IncompletePaymentSeen['outcome'],
+) => {
   lastSeen = { paymentId, hasTxid, outcome };
 };
 
-export const handleIncompletePayment = async (payment: PaymentDTO): Promise<void> => {
+export const handleIncompletePayment = async (
+  payment: PaymentDTO,
+): Promise<void> => {
   const paymentId = payment?.identifier;
   if (!paymentId || inFlight.has(paymentId)) return;
   const txid = payment.transaction?.txid ?? null;
@@ -49,13 +58,18 @@ export const handleIncompletePayment = async (payment: PaymentDTO): Promise<void
 
   try {
     // The Supabase user (never the Pi uid): the server checks it against the row and the payer
-    const { data: { session } } = await supabase.auth.getSession();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
     const userId = session?.user?.id;
 
     if (txid) {
       if (!userId) {
         record(paymentId, true, 'unfinished');
-        toast.error('Sign in to finish your earlier Pi payment, then try again.', { id: 'pi:incomplete' });
+        toast.error(
+          'Sign in to finish your earlier Pi payment, then try again.',
+          { id: 'pi:incomplete' },
+        );
         return;
       }
       const result = await completePayment({
@@ -69,11 +83,15 @@ export const handleIncompletePayment = async (payment: PaymentDTO): Promise<void
       if (result.success) {
         record(paymentId, true, 'completed');
         log('completed', { paymentId });
-        toast.success('Your earlier Pi payment is complete.', { id: 'pi:incomplete' });
+        toast.success('Your earlier Pi payment is complete.', {
+          id: 'pi:incomplete',
+        });
       } else {
         record(paymentId, true, 'refused');
         log('refused', { paymentId, errorCode: result.error_code ?? null });
-        toast.error(result.message || UNFINISHED_PAYMENT_MESSAGE, { id: 'pi:incomplete' });
+        toast.error(result.message || UNFINISHED_PAYMENT_MESSAGE, {
+          id: 'pi:incomplete',
+        });
       }
       return;
     }
@@ -83,7 +101,10 @@ export const handleIncompletePayment = async (payment: PaymentDTO): Promise<void
     if (cleaned?.success && (cleaned.cleanedCount ?? 0) > 0) {
       record(paymentId, false, 'cancelled');
       log('cancelled', { paymentId });
-      toast.info('An earlier unfinished Pi payment was cancelled. Please try again.', { id: 'pi:incomplete' });
+      toast.info(
+        'An earlier unfinished Pi payment was cancelled. Please try again.',
+        { id: 'pi:incomplete' },
+      );
       return;
     }
     record(paymentId, false, 'unfinished');
@@ -91,7 +112,10 @@ export const handleIncompletePayment = async (payment: PaymentDTO): Promise<void
     toast.error(UNFINISHED_PAYMENT_MESSAGE, { id: 'pi:incomplete' });
   } catch (error) {
     record(paymentId, !!txid, 'unfinished');
-    log('error', { paymentId, message: error instanceof Error ? error.message : String(error) });
+    log('error', {
+      paymentId,
+      message: error instanceof Error ? error.message : String(error),
+    });
     toast.error(UNFINISHED_PAYMENT_MESSAGE, { id: 'pi:incomplete' });
   } finally {
     inFlight.delete(paymentId);
