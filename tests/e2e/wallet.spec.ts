@@ -75,6 +75,12 @@ async function setup(page: Page, options: Options = {}) {
     return route.fulfill({ json: filtered ? rows.filter((row) => row.amount_pi < 0 || row.transaction_type !== 'deposit') : rows });
   });
   await page.route('**/rest/v1/businesses*', (route) => {
+    // The unread-messages count asks for the owner's business ids on every page (#161). It isn't
+    // the wallet's request, so it's answered here and not recorded
+    if (new URL(route.request().url()).searchParams.get('select') === 'id') {
+      const rows = Array.isArray(data.businesses) ? (data.businesses as { id: number }[]) : [];
+      return route.fulfill({ json: rows.map((b) => ({ id: b.id })) });
+    }
     requests.businesses.push(route.request().url());
     return data.businesses === 'fails' ? route.fulfill({ status: 500, json: { message: 'boom' } }) : route.fulfill({ json: data.businesses ?? [] });
   });

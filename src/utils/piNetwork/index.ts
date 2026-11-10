@@ -10,6 +10,10 @@ export {
   withPiInit,
   getNativeFeaturesList,
   isPiInstanceInitialized,
+  ensurePiPaymentsAuth,
+  hasPaymentsAuth,
+  getInstanceScopes,
+  PAYMENT_SCOPES,
   isSdkInitialized, 
   requestUserPermissions, 
   forceSdkReinitialization, 
@@ -26,6 +30,10 @@ export {
   PiClient,
   piNetworkCore,
 } from './core';
+
+// Unfinished payments at Pi
+export { getLastIncompletePayment, handleIncompletePayment, UNFINISHED_PAYMENT_MESSAGE } from './incompletePayment';
+export type { IncompletePaymentSeen } from './incompletePayment';
 
 // Export helpers
 export { isPiNetworkAvailable, isSessionExpired, isPiBrowser, getBrowserInfo } from './helpers';
