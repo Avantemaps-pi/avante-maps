@@ -90,3 +90,17 @@ test('the username is shown read-only, with where it comes from, and is never wr
   expect(editable).toEqual([]);
   expect(userWrites).toEqual([]);
 });
+
+test('the Pi wallet address is shown whole, wrapping rather than cut off', async ({
+  page,
+}) => {
+  await openProfile(page);
+  const wallet = page.locator('#wallet');
+  await expect(wallet).toHaveValue(mockUser.walletAddress);
+  const fit = await wallet.evaluate((el) => ({
+    sideways: el.scrollWidth <= el.clientWidth,
+    downwards: el.scrollHeight <= el.clientHeight + 1,
+  }));
+  expect(fit).toEqual({ sideways: true, downwards: true });
+  await expect(wallet).not.toBeEditable();
+});

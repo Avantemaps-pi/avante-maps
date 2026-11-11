@@ -5,6 +5,7 @@ import { Label } from '@/components/ui/label';
 import { Monitor, Sun, Moon, MapPin } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import HomeLocationSetting from './HomeLocationSetting';
 
 interface AppPreferencesProps {
   colorScheme: 'system' | 'light' | 'dark';
@@ -76,6 +77,7 @@ const AppPreferences = ({
               aria-label="Use my location"
             />
           </div>
+          <HomeLocationSetting />
         </div>
       </CardContent>
     </Card>

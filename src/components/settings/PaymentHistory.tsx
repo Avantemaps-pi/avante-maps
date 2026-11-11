@@ -64,9 +64,12 @@ const planLabel = (tierId: string | undefined) => {
   return name ? `${name} plan` : 'Plan';
 };
 
+// Date and time in the user's local time: "11 Nov · 15:12", with the year when it isn't this one
 const formatDate = (ts: string | null) => {
   const date = ts ? new Date(ts) : null;
-  return date && !Number.isNaN(date.getTime()) ? format(date, 'd MMM') : '—';
+  if (!date || Number.isNaN(date.getTime())) return '—';
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return format(date, sameYear ? 'd MMM · HH:mm' : 'd MMM yyyy · HH:mm');
 };
 
 const sortTime = (ts: string | null) => {

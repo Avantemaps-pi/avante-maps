@@ -1076,6 +1076,9 @@ export type Database = {
         Row: {
           created_at: string | null
           email: string | null
+          home_lat: number | null
+          home_lng: number | null
+          home_set_at: string | null
           id: string
           pi_uid: string | null
           pi_wallet_address: string | null
@@ -1086,6 +1089,9 @@ export type Database = {
         Insert: {
           created_at?: string | null
           email?: string | null
+          home_lat?: number | null
+          home_lng?: number | null
+          home_set_at?: string | null
           id?: string
           pi_uid?: string | null
           pi_wallet_address?: string | null
@@ -1096,6 +1102,9 @@ export type Database = {
         Update: {
           created_at?: string | null
           email?: string | null
+          home_lat?: number | null
+          home_lng?: number | null
+          home_set_at?: string | null
           id?: string
           pi_uid?: string | null
           pi_wallet_address?: string | null
