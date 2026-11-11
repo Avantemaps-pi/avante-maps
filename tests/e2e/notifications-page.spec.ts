@@ -287,8 +287,9 @@ async function setup(
 
 const row = (page: Page, kind: string) =>
   page.locator(`[data-notification-row="${kind}"]`);
+// A tab by its label, with or without its unread count ("Account, 2 unread")
 const tab = (page: Page, name: string) =>
-  page.getByRole('tab', { name, exact: true });
+  page.getByRole('tab', { name: new RegExp(`^${name}(, \\d+ unread)?$`) });
 const allKindRows = () => KINDS.map((f, i) => kindRow(f, i));
 
 // The list loads after hydration (the server's page already shows All and the empty state), so
@@ -608,4 +609,143 @@ test('a click_url that is not an in-app path gets no action link, and tapping th
   // Nothing was opened, so no click is recorded either
   expect(tracked.filter((t) => t['event_type'] === 'clicked')).toEqual([]);
   expect(tracked.some((t) => 'click_url' in t)).toBe(false);
+});
+
+// ---- Unread counts on the tabs
+
+const byKind = (kind: string) => KINDS.findIndex((f) => f.kind === kind);
+const unreadRow = (kind: string) => kindRow(KINDS[byKind(kind)]!, byKind(kind));
+const chip = (page: Page, name: string) =>
+  tab(page, name).locator('[data-tab-unread]');
+
+test('each tab shows its unread count: 2 payments and 1 message → All 3, Account 2, Activity 1', async ({
+  page,
+}) => {
+  await setup(page, [
+    unreadRow('topup_received'),
+    unreadRow('plan_paid'),
+    unreadRow('new_message'),
+    { ...OLD_BUSINESS },
+  ]);
+  await open(page);
+  await expect(chip(page, 'All')).toHaveText('3');
+  await expect(chip(page, 'Account')).toHaveText('2');
+  await expect(chip(page, 'Activity')).toHaveText('1');
+  // The accessible names carry the count
+  await expect(
+    page.getByRole('tab', { name: 'Account, 2 unread', exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('tab', { name: 'Activity, 1 unread', exact: true }),
+  ).toBeVisible();
+});
+
+test('reading a notification lowers the counts; at 0 the chip goes and the name is the label alone', async ({
+  page,
+}) => {
+  await setup(page, [unreadRow('plan_paid'), unreadRow('new_message')]);
+  await open(page);
+  await expect(chip(page, 'All')).toHaveText('2');
+  await row(page, 'new_message').tap();
+  await page.goBack();
+  await expect(chip(page, 'All')).toHaveText('1');
+  await expect(chip(page, 'Account')).toHaveText('1');
+  await expect(chip(page, 'Activity')).toHaveCount(0);
+  await expect(
+    page.getByRole('tab', { name: 'Activity', exact: true }),
+  ).toBeVisible();
+});
+
+test('Mark all as read on a tab: its count and All drop, the other keeps its own', async ({
+  page,
+}) => {
+  await setup(page, [
+    unreadRow('topup_received'),
+    unreadRow('plan_paid'),
+    unreadRow('new_message'),
+  ]);
+  await open(page);
+  await tab(page, 'Account').tap();
+  await page.getByRole('button', { name: 'Mark all as read' }).tap();
+  await expect(chip(page, 'Account')).toHaveCount(0);
+  await expect(chip(page, 'All')).toHaveText('1');
+  await expect(chip(page, 'Activity')).toHaveText('1');
+});
+
+test('nothing unread: no chips', async ({ page }) => {
+  await setup(page, [
+    kindRow(KINDS[byKind('plan_paid')]!, 0, true),
+    { ...OLD_BUSINESS },
+  ]);
+  await open(page);
+  await expect(page.locator('[data-tab-unread]')).toHaveCount(0);
+  await expect(
+    page.getByRole('tab', { name: 'All', exact: true }),
+  ).toBeVisible();
+});
+
+test('120 unread: the chip says 99+, the name says 120', async ({ page }) => {
+  const many = Array.from({ length: 120 }, (_, i) => ({
+    ...unreadRow('plan_paid'),
+    id: `n-many-${i}`,
+    created_at: daysAgo(1 + i / 100),
+  }));
+  await setup(page, many);
+  await open(page);
+  await expect(chip(page, 'All')).toHaveText('99+');
+  await expect(chip(page, 'Account')).toHaveText('99+');
+  await expect(
+    page.getByRole('tab', { name: 'All, 120 unread', exact: true }),
+  ).toBeVisible();
+});
+
+test('the active chip is primary with white text, the others muted; tabs stay 44px and fit at 360px', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  const many = Array.from({ length: 120 }, (_, i) => ({
+    ...unreadRow(i % 2 ? 'plan_paid' : 'new_message'),
+    id: `n-many-${i}`,
+    created_at: daysAgo(1 + i / 100),
+  }));
+  await setup(page, many);
+  await open(page);
+  const primary = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue('--primary'),
+  );
+  expect(primary).not.toBe('');
+  const active = chip(page, 'All');
+  const inactive = chip(page, 'Activity');
+  expect(await computed(active, 'color')).toBe('rgb(255, 255, 255)');
+  expect(await computed(active, 'backgroundColor')).not.toBe(
+    await computed(inactive, 'backgroundColor'),
+  );
+  for (const name of ['All', 'Account', 'Activity']) {
+    const box = await tab(page, name).boundingBox();
+    expect(box!.height).toBe(44);
+    // Label and chip inside the tab, nothing clipped
+    const fits = await tab(page, name).evaluate(
+      (el) => el.scrollWidth <= el.clientWidth,
+    );
+    expect(fits).toBe(true);
+  }
+  const noSideways = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  );
+  expect(noSideways).toBe(true);
+});
+
+test('arrow keys still switch tabs with counts shown', async ({ page }) => {
+  await setup(page, [unreadRow('plan_paid'), unreadRow('new_message')]);
+  await open(page);
+  await tab(page, 'All').focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(tab(page, 'Account')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab(page, 'Account')).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(tab(page, 'Activity')).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowRight');
+  await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('ArrowLeft');
+  await expect(tab(page, 'Activity')).toHaveAttribute('aria-selected', 'true');
 });

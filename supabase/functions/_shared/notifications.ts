@@ -20,7 +20,17 @@ interface CreateNotificationParams {
   content: string;
   metadata?: Record<string, unknown>;
   priority?: NotificationPriority;
+  /** The in-app path the notification's action opens */
+  clickUrl?: string;
 }
+
+// The plans' display names, for notices (never the slug)
+export const PLAN_NAMES: Record<string, string> = {
+  individual: 'Individual',
+  'small-business': 'Small Business',
+  organization: 'Organization',
+};
+export const planName = (tier: string) => PLAN_NAMES[tier] ?? tier;
 
 /**
  * Creates a notification in the database
@@ -30,7 +40,14 @@ export async function createNotification(
   supabase: SupabaseClient,
   params: CreateNotificationParams
 ): Promise<{ success: boolean; error?: string }> {
-  const { userId, type, content, metadata = {}, priority = 'medium' } = params;
+  const {
+    userId,
+    type,
+    content,
+    metadata = {},
+    priority = 'medium',
+    clickUrl,
+  } = params;
 
   try {
     const { error } = await supabase
@@ -44,6 +61,7 @@ export async function createNotification(
         read: false,
         delivery_status: 'delivered',
         delivered_at: new Date().toISOString(),
+        ...(clickUrl ? { click_url: clickUrl } : {}),
       });
 
     if (error) {
@@ -99,23 +117,42 @@ export async function createBusinessNotification(
 }
 
 /**
- * Helper to create a payment-related notification
+ * A payment from the user's Avante Maps balance (nothing was received: the user paid). A plan
+ * gets kind plan_paid and View plan, like complete-payment's plan notice; anything else
+ * balance_paid and Open wallet
  */
-export async function createPaymentNotification(
+export function createBalancePaymentNotification(
   supabase: SupabaseClient,
   userId: string,
-  amount: number,
-  subscriptionTier?: string
+  amountPi: number,
+  subscriptionTier?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const tierMessage = subscriptionTier 
-    ? ` Your ${subscriptionTier} subscription is now active.`
-    : '';
-  
+  const paid = `${amountPi.toFixed(2)} π was paid from your Avante Maps balance.`;
+  if (subscriptionTier) {
+    return createNotification(supabase, {
+      userId,
+      type: 'payment',
+      content: `Your ${planName(subscriptionTier)} plan is active. ${paid}`,
+      metadata: {
+        kind: 'plan_paid',
+        tier: subscriptionTier,
+        amount: amountPi,
+        actionLabel: 'View plan',
+      },
+      priority: 'high',
+      clickUrl: '/pricing',
+    });
+  }
   return createNotification(supabase, {
     userId,
     type: 'payment',
-    content: `Payment of ${amount} Pi received successfully!${tierMessage}`,
-    metadata: { amount, tier: subscriptionTier, status: 'approved' },
+    content: paid.charAt(0).toUpperCase() + paid.slice(1),
+    metadata: {
+      kind: 'balance_paid',
+      amount: amountPi,
+      actionLabel: 'Open wallet',
+    },
     priority: 'high',
+    clickUrl: '/wallet',
   });
 }

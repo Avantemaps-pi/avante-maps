@@ -210,7 +210,7 @@ test('with approved_amount_pi: passes even if pi_price has moved a lot', async (
   assertEquals(notifications().length, 1);
   // The same text as before, now with the kind, action and link
   const n = notifications()[0]!;
-  assertEquals(n['content'], 'Payment of 65.19 Pi received successfully! Your small-business subscription is now active.');
+  assertEquals(n['content'], 'Payment of 65.19 Pi received. Your Small Business plan is now active.');
   assertEquals(n['click_url'], '/pricing');
   assertEquals(n['type'], 'payment');
   assertEquals((n['metadata'] as Row)['kind'], 'plan_paid');

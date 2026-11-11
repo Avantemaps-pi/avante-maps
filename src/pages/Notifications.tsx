@@ -16,7 +16,7 @@ import NotificationItem from '@/components/notifications/NotificationItem';
 import EmptyNotifications from '@/components/notifications/EmptyNotifications';
 import NotificationCategoryTabs from '@/components/notifications/NotificationCategoryTabs';
 import BulkActionsBar from '@/components/notifications/BulkActionsBar';
-import { NotificationCategory, getNotificationsByCategory } from '@/utils/notificationCategories';
+import { NotificationCategory, getAllCategoryCounts, getNotificationsByCategory } from '@/utils/notificationCategories';
 import { RefreshCw } from 'lucide-react';
 
 // Today (by the device's date) or earlier; a row just received has no created_at yet: today
@@ -216,6 +216,7 @@ const Notifications = () => {
           <NotificationCategoryTabs
             activeCategory={activeCategory}
             onCategoryChange={setActiveCategory}
+            counts={getAllCategoryCounts(notifications)}
           />
         </div>
 

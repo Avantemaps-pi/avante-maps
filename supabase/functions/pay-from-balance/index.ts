@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
-import { createPaymentNotification } from '../_shared/notifications.ts';
+import { createBalancePaymentNotification } from '../_shared/notifications.ts';
 import { getExpectedPlanPi, roundUpPi } from '../_shared/prices.ts';
 import {
   getOrCreateLifecycleId,
@@ -126,7 +126,7 @@ Deno.serve(async (req) => {
     if (!alreadyPaid && !lookupError) {
       // Reports a failure by returning it, and could throw on something unexpected
       try {
-        const notified = await createPaymentNotification(supabaseClient, userId, amountPi, tier);
+        const notified = await createBalancePaymentNotification(supabaseClient, userId, amountPi, tier);
         if (notified.success) {
           log.info(`${FN}.notify.created`, { stage: 'notify' });
         } else {

@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 import { AMOUNT_TOLERANCE, getExpectedPlanPi } from '../_shared/prices.ts';
+import { planName } from '../_shared/notifications.ts';
 import { createPiPayments, piSaysAlready, type PiAppClient } from '../_shared/piPaymentsClient.ts';
 import {
   getOrCreateLifecycleId,
@@ -52,12 +53,6 @@ const COMPLETED_STATUS = { approved: true, verified: true, completed: true, canc
 // Pi uids and usernames in logs: enough to tell them apart, never the whole value
 const shortUid = (uid: unknown) => (typeof uid === 'string' && uid ? `${uid.slice(0, 6)}…` : null);
 
-const PLAN_NAMES: Record<string, string> = {
-  individual: 'Individual',
-  'small-business': 'Small Business',
-  organization: 'Organization',
-};
-const planName = (tier: string) => PLAN_NAMES[tier] ?? tier;
 
 interface PaymentNotification {
   kind: 'topup_received' | 'plan_paid' | 'plan_not_activated';
@@ -92,7 +87,7 @@ async function notifyPayment(
   }
 }
 
-// A top up, or a plan paid for and active: the same text as before
+// A top up (the same text as before), or a plan paid for and active, by its display name
 const notifyPaymentReceived = (
   supabase: typeof supabaseClient,
   userId: string,
@@ -101,7 +96,9 @@ const notifyPaymentReceived = (
 ) =>
   notifyPayment(supabase, userId, {
     kind: subscriptionTier ? 'plan_paid' : 'topup_received',
-    content: `Payment of ${amount} Pi received successfully!${subscriptionTier ? ` Your ${subscriptionTier} subscription is now active.` : ''}`,
+    content: subscriptionTier
+      ? `Payment of ${Number(amount).toFixed(2)} Pi received. Your ${planName(subscriptionTier)} plan is now active.`
+      : `Payment of ${amount} Pi received successfully!`,
     metadata: { amount, tier: subscriptionTier, status: 'approved' },
     actionLabel: subscriptionTier ? 'View plan' : 'Open wallet',
     clickUrl: subscriptionTier ? '/pricing' : '/wallet',

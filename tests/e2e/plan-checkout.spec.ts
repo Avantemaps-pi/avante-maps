@@ -43,6 +43,8 @@ async function setup(
     rowStatus?: Record<string, unknown>;
     /** How many times the mocked Pi SDK calls onReadyForServerApproval at once (default 1) */
     approvalCalls?: number;
+    /** Once pay-from-balance has succeeded: the balance, and the wallet_ledger rows */
+    afterPay?: { balance: number; ledger: object[] };
   } = {},
 ) {
   const payCalls: { body: Record<string, unknown>; headers: Record<string, string> }[] = [];
@@ -74,7 +76,14 @@ async function setup(
   await page.route('**/functions/v1/payment-status', (route) =>
     route.fulfill({ json: { success: true, status: options.rowStatus ?? { approved: true, completed: false, cancelled: false } } }),
   );
+  await page.route('**/rest/v1/wallet_ledger*', (route) => {
+    const after = payCalls.length ? options.afterPay : undefined;
+    return route.fulfill({ json: after ? after.ledger : [] });
+  });
   await page.route('**/rest/v1/rpc/get_wallet_balance*', async (route) => {
+    if (options.afterPay && payCalls.length) {
+      return route.fulfill({ json: options.afterPay.balance });
+    }
     balances.push(options.balance);
     if (options.balance === 'never') return; // Stays loading
     if (options.balance === 'fails') return route.fulfill({ status: 500, json: { message: 'boom' } });
@@ -556,4 +565,57 @@ test('Pi calling onReadyForServerApproval 3 times at once: one approve-payment r
     .tap();
   await expect.poll(() => completeCalls.length).toBe(1);
   expect(approveCalls).toHaveLength(1);
+});
+
+// Paid from the balance: the Wallet shows the new balance and the plan row straight away, not up to
+// a minute later from the cache (staleTime is 1 min)
+test('after paying from the balance, the Wallet shows the reduced balance and the plan row without a refresh', async ({
+  page,
+}) => {
+  await setup(page, {
+    balance: 100,
+    afterPay: {
+      balance: 34.81,
+      ledger: [
+        {
+          id: 21,
+          amount_pi: -65.19,
+          transaction_type: 'subscription',
+          reference_id:
+            'plan:small-business:monthly:11111111-1111-4111-8111-111111111111',
+          created_at: new Date().toISOString(),
+        },
+      ],
+    },
+  });
+  // The Wallet first, so its balance and activity are in the cache
+  await page.goto('/wallet');
+  const activity = page.getByRole('region', { name: 'Recent activity' });
+  await expect(page.getByText('100.00 π')).toBeVisible();
+  await expect(activity.getByText('No activity yet')).toBeVisible();
+
+  // To Pricing in the app (no reload), and pay from the balance
+  await expect(async () => {
+    await page.getByRole('button', { name: 'Open menu' }).tap();
+    await expect(
+      page.getByRole('link', { name: 'Pricing', exact: true }),
+    ).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+  await page.getByRole('link', { name: 'Pricing', exact: true }).tap();
+  await page.waitForURL('**/pricing');
+  await expect(page.getByText('π 65.19')).toBeVisible();
+  await planButton(page).tap();
+  await sheet(page)
+    .getByRole('button', { name: 'Pay 65.19 π from balance' })
+    .tap();
+  await expect(page.getByText('Small Business plan active')).toBeVisible();
+
+  // Back to the Wallet the same way
+  await page.getByRole('button', { name: /back/i }).first().tap();
+  await page.waitForURL('**/wallet');
+  await expect(page.getByText('34.81 π')).toBeVisible();
+  const row = activity.getByRole('listitem').first();
+  await expect(row).toContainText('Small Business plan');
+  await expect(row).toContainText('Plan · Paid from balance');
+  await expect(row).toContainText('− 65.19 π');
 });
