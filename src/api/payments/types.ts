@@ -9,6 +9,8 @@ export interface PaymentRequest {
   amount: number;
   memo: string;
   metadata: Record<string, any>;
+  /** This visit's Pi access token: the server asks Pi who holds it (Pi uids are per app) */
+  piAccessToken: string | undefined;
 }
 
 export interface PaymentResponse {

@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { completePayment } from '@/api/payments';
 import { cleanupStalePayments } from '@/api/payments/cleanupStalePayments';
 import { supabase } from '@/integrations/supabase/client';
+import { getPiAccessTokenForPayment } from './core';
 import type { PaymentDTO } from './types';
 
 export const UNFINISHED_PAYMENT_MESSAGE =
@@ -79,6 +80,7 @@ export const handleIncompletePayment = async (
         memo: payment.memo ?? '',
         metadata: payment.metadata ?? {},
         txid,
+        piAccessToken: await getPiAccessTokenForPayment(),
       });
       if (result.success) {
         record(paymentId, true, 'completed');

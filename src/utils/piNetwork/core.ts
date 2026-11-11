@@ -14,6 +14,11 @@ let sdkLoaded = false;
 let initInFlight: Promise<boolean> | null = null;
 let sandboxMode = false;
 let cachedAuth: AuthResult | null = null;
+// The access token from the last Pi.authenticate() this page load, for the server's payer check.
+// Memory only. A new SDK object has no scopes, so ensurePiPaymentsAuth replaces it before a payment
+let piAccessToken: string | null = null;
+// The authenticate running now: Pi reports unfinished payments from inside it
+let authInFlight: Promise<AuthResult> | null = null;
 // Registered once, here where the SDK code loads: an unfinished payment Pi reports (from
 // authenticate or createPayment) is completed or cancelled, or the user is told what to do
 let incompletePaymentHandler: ((payment: PaymentDTO) => void) | null = (payment) => {
@@ -274,7 +279,7 @@ const isScopeError = (error: unknown): boolean => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Authentication Helpers
 // ─────────────────────────────────────────────────────────────────────────────
-export const authenticate = async (scopes: Scope[] = ['username', 'payments']): Promise<AuthResult> => {
+const runAuthenticate = async (scopes: Scope[]): Promise<AuthResult> => {
   await ensurePiInitialized();
 
   const host = window.location?.hostname || 'unknown';
@@ -294,6 +299,7 @@ export const authenticate = async (scopes: Scope[] = ['username', 'payments']): 
     window.Pi.authenticate(scopes, (payment: PaymentDTO) => incompletePaymentHandler?.(payment)),
   );
   recordInstanceScopes(pi, scopes);
+  piAccessToken = result.accessToken;
   
   const authResult: AuthResult = {
     accessToken: result.accessToken,
@@ -313,14 +319,35 @@ export const authenticate = async (scopes: Scope[] = ['username', 'payments']): 
   return authResult;
 };
 
+export const authenticate = (scopes: Scope[] = ['username', 'payments']): Promise<AuthResult> => {
+  const run: Promise<AuthResult> = runAuthenticate(scopes).finally(() => {
+    if (authInFlight === run) authInFlight = null;
+  });
+  authInFlight = run;
+  return run;
+};
+
 /**
  * Authenticates the current SDK object with the payment scopes if it hasn't been this page load.
  * Silent when the user has already agreed. Returns the scopes it now has
  */
 export const ensurePiPaymentsAuth = async (): Promise<Scope[]> => {
   await ensurePiInitialized();
-  if (!hasPaymentsAuth()) await authenticate(PAYMENT_SCOPES);
+  if (!hasPaymentsAuth() || !piAccessToken) await authenticate(PAYMENT_SCOPES);
   return getInstanceScopes();
+};
+
+/** This page load's Pi access token, sent with approve-payment and complete-payment */
+export const getPiAccessToken = (): string | undefined => piAccessToken ?? undefined;
+
+/**
+ * The token for a payment Pi reported as unfinished. Pi reports it from inside Pi.authenticate(),
+ * so this waits for that call rather than starting a second one
+ */
+export const getPiAccessTokenForPayment = async (): Promise<string | undefined> => {
+  await authInFlight?.catch(() => undefined);
+  await ensurePiPaymentsAuth();
+  return getPiAccessToken();
 };
 
 export const getCachedAuth = (): AuthResult | null => {
@@ -339,6 +366,7 @@ export const getCachedAuth = (): AuthResult | null => {
 
 export const clearAuth = (): void => {
   cachedAuth = null;
+  piAccessToken = null;
   try {
     localStorage.removeItem(AUTH_STORAGE_KEY);
   } catch { /* localStorage unavailable */ }
