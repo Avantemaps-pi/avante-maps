@@ -188,15 +188,27 @@ test('roundUpPi: rounds up, and float noise does not add a cent', () => {
   return Promise.resolve();
 });
 
-test('a new payment gets a notification, naming the amount and the plan', async () => {
+test('a plan paid from the balance: the plan by name, what was paid, plan_paid, View plan and /pricing', async () => {
   const { fake, notifications } = setup();
   assertEquals((await call(VALID)).status, 200);
   assertEquals(notifications().length, 1);
   const notification = notifications()[0]!;
   assertEquals(notification['user_id'], OWNER);
   assertEquals(notification['type'], 'payment');
-  assert(String(notification['content']).includes('65.19'));
-  assert(String(notification['content']).includes('small-business'));
+  assertEquals(
+    notification['content'],
+    'Your Small Business plan is active. 65.19 π was paid from your Avante Maps balance.',
+  );
+  assertEquals(notification['click_url'], '/pricing');
+  assertEquals(notification['metadata'], {
+    kind: 'plan_paid',
+    tier: 'small-business',
+    amount: 65.19,
+    actionLabel: 'View plan',
+  });
+  // Nothing was received: the user paid
+  assert(!String(notification['content']).includes('received'));
+  assert(!String(notification['content']).includes('small-business'));
   fake.restore();
 });
 
