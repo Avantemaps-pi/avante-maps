@@ -230,13 +230,15 @@ test.describe('task pages and main destinations at 375x812', () => {
     });
   }
 
-  test('/update-registration (from Your businesses → Edit): no bottom nav, Go back, Submit reachable', async ({ page }) => {
+  test('/update-registration (from Your businesses → Edit): no bottom nav, Go back, Save reachable in a section', async ({ page }) => {
     await page.goto('/registered-business');
     await page.getByRole('button', { name: 'Edit' }).first().tap();
     await page.waitForURL('**/update-registration/9601');
     await expectTaskPage(page);
-    await page.getByRole('tab').last().tap();
-    await expectReachableAtBottom(page, page.getByRole('button', { name: 'Submit Registration' }));
+    await page.getByRole('link', { name: /^Hours/ }).tap();
+    await page.waitForURL('**/update-registration/9601/hours');
+    await expectTaskPage(page);
+    await expectReachableAtBottom(page, page.getByRole('button', { name: 'Save', exact: true }));
   });
 
   test('/review: the header has the only back control, and Submit Review is reachable', async ({ page }) => {
