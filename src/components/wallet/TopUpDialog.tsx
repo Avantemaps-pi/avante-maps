@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -32,24 +32,28 @@ const TopUpDialog: React.FC<TopUpDialogProps> = ({ onDone }) => {
   const isValidAmount =
     Number.isFinite(parsedAmount) && parsedAmount >= MIN_TOP_UP_PI;
 
+  // Aborted by Cancel (or leaving the page) to stop waiting for the payment
+  const waiting = useRef<AbortController | null>(null);
+  useEffect(() => () => waiting.current?.abort(), []);
+
   const handleConfirm = async () => {
     if (!isValidAmount || isProcessing) return;
 
+    const controller = new AbortController();
+    waiting.current = controller;
     setIsProcessing(true);
     try {
+      // Always settles: the payment's result, a timeout, or stopped_waiting after Cancel. Pi's
+      // later callbacks for this payment don't reach the dialog (a completion still credits)
       const result = await executeWalletTopUp(parsedAmount, {
-        onPaymentId: () => {
-          // Payment created and awaiting Pi Browser approval — keep the button
-          // locked; the awaited promise resolves on the terminal state.
-          setIsProcessing(true);
-        },
+        signal: controller.signal,
       });
 
       // The server's own message either way: a refused or failed top up never reads as a success
       if (result.success) {
         toast.success(result.message);
         setOpen(false);
-      } else {
+      } else if (result.errorCode !== 'stopped_waiting') {
         toast.error(result.message);
       }
     } catch (error) {
@@ -59,10 +63,18 @@ const TopUpDialog: React.FC<TopUpDialogProps> = ({ onDone }) => {
           : 'Failed to top up wallet'
       );
     } finally {
+      if (waiting.current === controller) waiting.current = null;
       setIsProcessing(false);
       // The balance may have changed whatever the result (a credit can land after an error)
       onDone();
     }
+  };
+
+  // Stops waiting and closes; the balance is refetched as the wait ends. It can't cancel the
+  // payment at Pi: if the owner still approves it in the Pi Wallet, it completes and credits
+  const handleCancel = () => {
+    waiting.current?.abort();
+    setOpen(false);
   };
 
   return (
@@ -75,7 +87,10 @@ const TopUpDialog: React.FC<TopUpDialogProps> = ({ onDone }) => {
         Top up
       </Button>
 
-      <Dialog open={open} onOpenChange={(next) => !isProcessing && setOpen(next)}>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => (next ? setOpen(true) : handleCancel())}
+      >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>Top up your wallet</DialogTitle>
@@ -108,8 +123,7 @@ const TopUpDialog: React.FC<TopUpDialogProps> = ({ onDone }) => {
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setOpen(false)}
-              disabled={isProcessing}
+              onClick={handleCancel}
             >
               Cancel
             </Button>
