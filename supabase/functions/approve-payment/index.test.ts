@@ -41,8 +41,13 @@ function setup(
     /** What Pi's /me answers (default: the owner, in this app) */
     me?: { uid?: string; username?: string };
     meStatus?: number;
+    /** Pi's answers to approve, one per call in order (then 200) */
+    approveAnswers?: { status: number; body: object }[];
+    /** Runs when Pi is asked to approve, before it answers (to interleave another request) */
+    onApprove?: () => Promise<void> | void;
   } = {},
 ) {
+  const approveAnswers = [...(options.approveAnswers ?? [])];
   const piCalls: string[] = [];
   const meAuth: (string | null)[] = [];
   const fake = installFakeSupabase({
@@ -76,6 +81,15 @@ function setup(
           });
       }
       if (action === 'cancel') return new Response('{}', { status: options.cancelStatus ?? 200 });
+      if (action === 'approve') {
+        const answerApprove = async () => {
+          await options.onApprove?.();
+          const answer = approveAnswers.shift();
+          if (!answer) return Response.json({ identifier: PAYMENT_ID });
+          return Response.json(answer.body, { status: answer.status });
+        };
+        return answerApprove();
+      }
       return Response.json({ identifier: PAYMENT_ID });
     },
   });
@@ -585,4 +599,43 @@ test('a stale mainnet row: cancelled at Pi with the mainnet key before approving
   } finally {
     two.restore();
   }
+});
+
+// ---- Pi says the payment is approved already (11 Nov: a duplicate approve cancelled a good payment)
+
+const PI_ALREADY_APPROVED = {
+  error: 'already_approved',
+  error_message: 'Current payment is already approved.',
+  payment: { identifier: PAYMENT_ID },
+};
+
+test("Pi's real already_approved answer (400, no message field): 200, row approved, not cancelled", async () => {
+  const { fake, row } = setup({
+    piAmount: 3,
+    approveAnswers: [{ status: 400, body: PI_ALREADY_APPROVED }],
+  });
+  const { status, json } = await call({ kind: 'wallet_topup' }, 3);
+  assertEquals(
+    [status, json.success, json.message],
+    [200, true, 'Payment was already approved'],
+  );
+  assertEquals(row()!['status'], {
+    approved: true,
+    verified: false,
+    completed: false,
+    cancelled: false,
+  });
+  fake.restore();
+});
+
+test('already approved, for a plan: the approved amount and plan are still stored', async () => {
+  const { fake, row } = setup({
+    piAmount: 65.19,
+    approveAnswers: [{ status: 400, body: PI_ALREADY_APPROVED }],
+  });
+  const { status } = await call(PLAN, 65.19);
+  assertEquals(status, 200);
+  assertEquals(row()!['approved_amount_pi'], 65.19);
+  assertEquals((row()!['status'] as Row)['cancelled'], false);
+  fake.restore();
 });

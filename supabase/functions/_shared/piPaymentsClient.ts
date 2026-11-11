@@ -156,3 +156,20 @@ export function createPiPayments(): PiPayments | null {
     },
   };
 }
+
+/**
+ * Whether Pi's answer to approve / complete says it was done already. Pi's error bodies use
+ * `error` (e.g. already_approved) and `error_message`, not `message`; all three are checked
+ */
+export const piSaysAlready = (
+  body: unknown,
+  done: 'approved' | 'completed',
+): boolean => {
+  if (!body || typeof body !== 'object') return false;
+  const fields = body as Record<string, unknown>;
+  if (fields['error'] === `already_${done}`) return true;
+  const phrase = `already ${done}`;
+  return [fields['error_message'], fields['message']].some(
+    (text) => typeof text === 'string' && text.toLowerCase().includes(phrase),
+  );
+};
