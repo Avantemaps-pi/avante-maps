@@ -6,6 +6,9 @@ import { secureLog } from '@/utils/secureLogger';
 import { useKeyboardOpen } from '@/hooks/useKeyboardOpen';
 import { hasGranted, markGranted, clearGranted } from '@/lib/gpsGrant';
 import { peekIpLocation, rememberIpLocation } from '@/hooks/useIpLocationFocus';
+import { useAuth } from '@/context/auth';
+import { useHomeLocation } from '@/hooks/useHomeLocation';
+import HomeLocationSheet from '@/components/map/HomeLocationSheet';
 
 const isPiBrowser = () => typeof window !== 'undefined' && !!(window as any).Pi;
 const logCtx = () => ({
@@ -18,7 +21,8 @@ const TOAST_ID = 'locate-me';
 const DENIED_TOAST_ID = 'locate-me-denied';
 const DENIED_MESSAGE =
   'Location is off for Avante Maps. Turn it on in your browser settings to use your exact location.';
-const APPROXIMATE_MESSAGE = 'Centred on your approximate location';
+const APPROXIMATE_MESSAGE =
+  'Centred on your approximate area (from your internet connection)';
 
 type GpsResult =
   | { ok: true; lat: number; lng: number; accuracy: number }
@@ -143,6 +147,15 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
   // the mount effect below so server and first client render stay identical.
   const [enabled, setEnabled] = useState<boolean>(true);
   const keyboardOpen = useKeyboardOpen();
+  // The fallback before the IP location, and "Set home location" when it isn't set
+  const { isAuthenticated } = useAuth();
+  const {
+    home,
+    isError: homeError,
+    saveHomeLocation,
+    isSaving,
+  } = useHomeLocation();
+  const [homeSheetOpen, setHomeSheetOpen] = useState(false);
 
   React.useEffect(() => {
     const sync = () => {
@@ -150,12 +163,29 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
     };
     sync();
     window.addEventListener('storage', sync);
-    window.addEventListener('use_location_focus_changed', sync as EventListener);
+    window.addEventListener(
+      'use_location_focus_changed',
+      sync as EventListener,
+    );
     return () => {
       window.removeEventListener('storage', sync);
-      window.removeEventListener('use_location_focus_changed', sync as EventListener);
+      window.removeEventListener(
+        'use_location_focus_changed',
+        sync as EventListener,
+      );
     };
   }, []);
+
+  const offerHome = (isAuthenticated: boolean) =>
+    // Only for a signed-in user whose home location is known to be unset
+    isAuthenticated && !homeError && home !== null && !home.position
+      ? {
+          action: {
+            label: 'Set home location',
+            onClick: () => setHomeSheetOpen(true),
+          },
+        }
+      : {};
 
   const useIpFallback = async () => {
     toast.loading('Resolving your approximate location…', {
@@ -167,12 +197,16 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
       // Kept in memory for this page load, never in browser storage
       rememberIpLocation(res);
       dispatchCenter(res.lat, res.lng);
-      toast.success(APPROXIMATE_MESSAGE, { id: TOAST_ID });
+      toast.success(APPROXIMATE_MESSAGE, {
+        id: TOAST_ID,
+        ...offerHome(isAuthenticated),
+      });
     } else {
       secureLog.error('LocateMe: all IP fallback providers failed', logCtx());
       toast.error("Couldn't determine your location", {
         id: TOAST_ID,
-        description: 'Network or service error. Check your connection and try again.',
+        description:
+          'Network or service error. Check your connection and try again.',
       });
     }
   };
@@ -187,27 +221,47 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
       let permissionState: PermissionState | 'unknown' = 'unknown';
       try {
         if (navigator.permissions?.query) {
-          const status = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+          const status = await navigator.permissions.query({
+            name: 'geolocation' as PermissionName,
+          });
           permissionState = status.state;
         }
       } catch (err: any) {
-        secureLog.debug('LocateMe: permissions.query threw', { error: err?.message });
+        secureLog.debug('LocateMe: permissions.query threw', {
+          error: err?.message,
+        });
       }
-      secureLog.info('LocateMe: permission state', { permissionState, ...logCtx() });
+      secureLog.info('LocateMe: permission state', {
+        permissionState,
+        ...logCtx(),
+      });
 
       // A tap is the user asking, so the browser may prompt every time: GPS is tried whenever the
       // permission isn't denied. (Centring on map load never prompts: LeafletMap, useIpLocationFocus)
       let denied = permissionState === 'denied';
       if (!denied && 'geolocation' in navigator) {
-        const noPrompt = permissionState === 'granted' || (permissionState === 'unknown' && hasGranted());
+        const noPrompt =
+          permissionState === 'granted' ||
+          (permissionState === 'unknown' && hasGranted());
         toast.loading(
-          noPrompt ? 'Getting your location…' : 'Requesting location permission…',
-          { id: TOAST_ID, description: permissionState === 'prompt' ? 'Please allow location access in the prompt.' : undefined }
+          noPrompt
+            ? 'Getting your location…'
+            : 'Requesting location permission…',
+          {
+            id: TOAST_ID,
+            description:
+              permissionState === 'prompt'
+                ? 'Please allow location access in the prompt.'
+                : undefined,
+          },
         );
         if (permissionState !== 'granted') markPrompted();
         const found = await getDevicePosition();
         if (found.ok) {
-          secureLog.info('LocateMe: geolocation succeeded', { accuracy: found.accuracy, ...logCtx() });
+          secureLog.info('LocateMe: geolocation succeeded', {
+            accuracy: found.accuracy,
+            ...logCtx(),
+          });
           markGranted();
           dispatchCenter(found.lat, found.lng);
           toast.success('Centred on your location', { id: TOAST_ID });
@@ -223,11 +277,19 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
         toast.message(DENIED_MESSAGE, { id: DENIED_TOAST_ID });
       }
 
-      // Fallback: the IP location
+      // Fallback: the user's home location, then the IP location
+      if (isAuthenticated && home?.position) {
+        dispatchCenter(home.position.lat, home.position.lng);
+        toast.success('Centred on your home location', { id: TOAST_ID });
+        return;
+      }
       const known = peekIpLocation();
       if (known) {
         dispatchCenter(known.lat, known.lng);
-        toast.success(APPROXIMATE_MESSAGE, { id: TOAST_ID });
+        toast.success(APPROXIMATE_MESSAGE, {
+          id: TOAST_ID,
+          ...offerHome(isAuthenticated),
+        });
         return;
       }
 
@@ -238,39 +300,57 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
   };
 
   const handleClickRef = React.useRef(handleClick);
-  React.useEffect(() => { handleClickRef.current = handleClick; });
   React.useEffect(() => {
-    const trigger = () => { handleClickRef.current?.(); };
+    handleClickRef.current = handleClick;
+  });
+  React.useEffect(() => {
+    const trigger = () => {
+      handleClickRef.current?.();
+    };
     window.addEventListener('trigger-locate-me', trigger as EventListener);
-    return () => window.removeEventListener('trigger-locate-me', trigger as EventListener);
+    return () =>
+      window.removeEventListener('trigger-locate-me', trigger as EventListener);
   }, []);
 
   // Early return only after every hook, so hook order is stable when the setting toggles
   if (!enabled) return null;
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={loading}
-      aria-label="Show my location"
-      aria-busy={loading}
-      // Hidden, not unmounted, while the keyboard is open so trigger-locate-me still works
-      aria-hidden={keyboardOpen || undefined}
-      inert={keyboardOpen}
-      title={loading ? 'Resolving your location…' : 'Show my location'}
-      className={cn(
-        'h-11 w-11 rounded-full bg-surface-float border border-border shadow-float flex items-center justify-center text-foreground hover:bg-accent transition-[color,background-color,border-color,opacity] duration-150 motion-reduce:transition-none disabled:opacity-70 disabled:cursor-progress',
-        keyboardOpen && 'opacity-0 disabled:opacity-0 pointer-events-none',
-        className
-      )}
-    >
-      {loading ? (
-        <Loader2 className="h-5 w-5 animate-spin" />
-      ) : (
-        <LocateFixed className="h-5 w-5" />
-      )}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={loading}
+        aria-label="Show my location"
+        aria-busy={loading}
+        // Hidden, not unmounted, while the keyboard is open so trigger-locate-me still works
+        aria-hidden={keyboardOpen || undefined}
+        inert={keyboardOpen}
+        title={loading ? 'Resolving your location…' : 'Show my location'}
+        className={cn(
+          'h-11 w-11 rounded-full bg-surface-float border border-border shadow-float flex items-center justify-center text-foreground hover:bg-accent transition-[color,background-color,border-color,opacity] duration-150 motion-reduce:transition-none disabled:opacity-70 disabled:cursor-progress',
+          keyboardOpen && 'opacity-0 disabled:opacity-0 pointer-events-none',
+          className,
+        )}
+      >
+        {loading ? (
+          <Loader2 className="h-5 w-5 animate-spin" />
+        ) : (
+          <LocateFixed className="h-5 w-5" />
+        )}
+      </button>
+      <HomeLocationSheet
+        open={homeSheetOpen}
+        onOpenChange={setHomeSheetOpen}
+        variant="settings"
+        home={home}
+        onSave={async (position) => {
+          await saveHomeLocation(position);
+          if (position) dispatchCenter(position.lat, position.lng);
+        }}
+        isSaving={isSaving}
+      />
+    </>
   );
 };
 
