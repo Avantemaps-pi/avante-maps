@@ -318,7 +318,15 @@ Deno.serve(async (req) => {
         if (Number.isFinite(amt) && amt > 0) piAmount = amt;
         piUserUid = typeof piPayment?.user_uid === 'string' && piPayment.user_uid ? piPayment.user_uid : null;
       } else {
-        log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', status: piGetResp.status });
+        // Pi's own error text (never the key): says whether it rejects the key or can't see the payment
+        const piErrorBody = (await piGetResp.text().catch(() => '')).slice(0, 300);
+        log.warn(`${FN}.pi_api.get_payment_failed`, {
+          stage: 'pi_api',
+          status: piGetResp.status,
+          piErrorBody,
+          keyLength: piApiKey.length,
+          keyHasWhitespace: /\s/.test(piApiKey),
+        });
       }
     } catch (getErr) {
       log.warn(`${FN}.pi_api.get_payment_exception`, {
