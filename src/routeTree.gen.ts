@@ -25,6 +25,7 @@ import { Route as RegisteredBusinessRouteImport } from './routes/registered-busi
 import { Route as RegistrationRouteImport } from './routes/registration'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as ValidationKeyDottxtRouteImport } from './routes/validation-key[.]txt'
 import { Route as VerificationInfoRouteImport } from './routes/verification-info'
 import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as RecommendationsIndexRouteImport } from './routes/recommendations/index'
@@ -114,6 +115,11 @@ const TermsRoute = TermsRouteImport.update({
   path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ValidationKeyDottxtRoute = ValidationKeyDottxtRouteImport.update({
+  id: '/validation-key.txt',
+  path: '/validation-key.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const VerificationInfoRoute = VerificationInfoRouteImport.update({
   id: '/verification-info',
   path: '/verification-info',
@@ -173,6 +179,7 @@ export interface FileRoutesByFullPath {
   '/registration': typeof RegistrationRoute
   '/settings': typeof SettingsRoute
   '/terms': typeof TermsRoute
+  '/validation-key.txt': typeof ValidationKeyDottxtRoute
   '/verification-info': typeof VerificationInfoRoute
   '/wallet': typeof WalletRoute
   '/recommendations/$placeId': typeof RecommendationsPlaceIdRoute
@@ -199,6 +206,7 @@ export interface FileRoutesByTo {
   '/registration': typeof RegistrationRoute
   '/settings': typeof SettingsRoute
   '/terms': typeof TermsRoute
+  '/validation-key.txt': typeof ValidationKeyDottxtRoute
   '/verification-info': typeof VerificationInfoRoute
   '/wallet': typeof WalletRoute
   '/recommendations/$placeId': typeof RecommendationsPlaceIdRoute
@@ -226,6 +234,7 @@ export interface FileRoutesById {
   '/registration': typeof RegistrationRoute
   '/settings': typeof SettingsRoute
   '/terms': typeof TermsRoute
+  '/validation-key.txt': typeof ValidationKeyDottxtRoute
   '/verification-info': typeof VerificationInfoRoute
   '/wallet': typeof WalletRoute
   '/recommendations/$placeId': typeof RecommendationsPlaceIdRoute
@@ -254,6 +263,7 @@ export interface FileRouteTypes {
     | '/registration'
     | '/settings'
     | '/terms'
+    | '/validation-key.txt'
     | '/verification-info'
     | '/wallet'
     | '/recommendations/$placeId'
@@ -280,6 +290,7 @@ export interface FileRouteTypes {
     | '/registration'
     | '/settings'
     | '/terms'
+    | '/validation-key.txt'
     | '/verification-info'
     | '/wallet'
     | '/recommendations/$placeId'
@@ -306,6 +317,7 @@ export interface FileRouteTypes {
     | '/registration'
     | '/settings'
     | '/terms'
+    | '/validation-key.txt'
     | '/verification-info'
     | '/wallet'
     | '/recommendations/$placeId'
@@ -333,6 +345,7 @@ export interface RootRouteChildren {
   RegistrationRoute: typeof RegistrationRoute
   SettingsRoute: typeof SettingsRoute
   TermsRoute: typeof TermsRoute
+  ValidationKeyDottxtRoute: typeof ValidationKeyDottxtRoute
   VerificationInfoRoute: typeof VerificationInfoRoute
   WalletRoute: typeof WalletRoute
   RecommendationsPlaceIdRoute: typeof RecommendationsPlaceIdRoute
@@ -457,6 +470,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/validation-key.txt': {
+      id: '/validation-key.txt'
+      path: '/validation-key.txt'
+      fullPath: '/validation-key.txt'
+      preLoaderRoute: typeof ValidationKeyDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/verification-info': {
       id: '/verification-info'
       path: '/verification-info'
@@ -533,6 +553,7 @@ const rootRouteChildren: RootRouteChildren = {
   RegistrationRoute: RegistrationRoute,
   SettingsRoute: SettingsRoute,
   TermsRoute: TermsRoute,
+  ValidationKeyDottxtRoute: ValidationKeyDottxtRoute,
   VerificationInfoRoute: VerificationInfoRoute,
   WalletRoute: WalletRoute,
   RecommendationsPlaceIdRoute: RecommendationsPlaceIdRoute,
