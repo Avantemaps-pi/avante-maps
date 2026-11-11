@@ -28,6 +28,18 @@ const PAYMENT_USER_MISMATCH = {
   message: "This payment was started from a different Pi account. Sign in with the account you're paying from.",
 };
 
+const PI_TOKEN_MISSING = {
+  success: false,
+  error_code: 'pi_token_missing',
+  message: 'Please reopen Avante Maps and try again.',
+};
+
+const PI_TOKEN_INVALID = {
+  success: false,
+  error_code: 'pi_token_invalid',
+  message: 'Your Pi sign-in has expired. Close and reopen Avante Maps, then try again.',
+};
+
 const FEE_NOT_RECORDED = {
   success: false,
   message: 'Payment completed but the message fee could not be recorded. Please try again.',
@@ -36,7 +48,7 @@ const FEE_NOT_RECORDED = {
 // The row's status once the Pi has moved
 const COMPLETED_STATUS = { approved: true, verified: true, completed: true, cancelled: false };
 
-// Pi uids in logs: enough to tell them apart, never the whole value
+// Pi uids and usernames in logs: enough to tell them apart, never the whole value
 const shortUid = (uid: unknown) => (typeof uid === 'string' && uid ? `${uid.slice(0, 6)}…` : null);
 
 const PLAN_NAMES: Record<string, string> = {
@@ -117,6 +129,8 @@ const PaymentRequestSchema = z.object({
     businessId: z.number().int().positive().optional(),
     feePi: z.number().positive().max(100).optional(),
   }).strict(),
+  // Optional here so a missing one gets pi_token_missing, not a generic validation error
+  piAccessToken: z.string().min(10).max(2000).optional(),
 });
 
 const supabaseClient = createClient(
@@ -261,6 +275,13 @@ Deno.serve(async (req) => {
     });
     log.info(`${FN}.validation.ok`, { stage: 'validation', amount: paymentRequest.amount });
 
+    // An old client still open. Nothing has been written yet
+    const piAccessToken = paymentRequest.piAccessToken;
+    if (!piAccessToken) {
+      log.warn(`${FN}.validation.pi_token_missing`, { stage: 'validation' });
+      return respond({ ...PI_TOKEN_MISSING, paymentId: paymentRequest.paymentId }, 400);
+    }
+
     const piApiKey = Deno.env.get('PI_API_KEY');
     if (!piApiKey) {
       log.error(`${FN}.config.missing_api_key`, { stage: 'error' });
@@ -328,24 +349,67 @@ Deno.serve(async (req) => {
       }
     };
 
-    // Whether the Pi account that paid is the signed-in user's (users.pi_uid). Never throws: an
-    // exception in the completion block below would mark the row cancelled
-    const checkPayer = async (piUserUid: string | null): Promise<'match' | 'mismatch' | 'error'> => {
+    // Who holds this visit's token, in this app: asked once per request. null if Pi won't say.
+    // Pi uids are per app and one project serves both apps, so users.pi_uid can't be compared
+    let piMeResult: { uid: string; username: string } | null | undefined;
+    const getPiMe = async (): Promise<{ uid: string; username: string } | null> => {
+      if (piMeResult !== undefined) return piMeResult;
+      piMeResult = null;
+      try {
+        const meResp = await fetch('https://api.minepi.com/v2/me', {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${piAccessToken}` },
+        });
+        if (meResp.ok) {
+          const me = await meResp.json();
+          // Without both we can't say who this is, which isn't the same as a different account
+          if (typeof me?.uid === 'string' && me.uid && typeof me?.username === 'string' && me.username) {
+            piMeResult = { uid: me.uid, username: me.username };
+            return piMeResult;
+          }
+          log.warn(`${FN}.pi_api.me_incomplete`, { stage: 'pi_api' });
+        } else {
+          log.warn(`${FN}.pi_api.me_failed`, { stage: 'pi_api', status: meResp.status });
+        }
+      } catch (meErr) {
+        log.warn(`${FN}.pi_api.me_exception`, {
+          stage: 'pi_api',
+          message: meErr instanceof Error ? meErr.message : String(meErr),
+        });
+      }
+      return null;
+    };
+
+    // Whether the token holder is the payer in this app, and the payer this account (a Pi username
+    // is the same in every app). Never throws: an exception in the completion block below would
+    // mark the row cancelled
+    const checkPayer = async (piUserUid: string | null): Promise<'match' | 'mismatch' | 'error' | 'token_invalid'> => {
+      const piMe = await getPiMe();
+      if (!piMe) return 'token_invalid';
       const { data: payer, error: payerError } = await supabaseClient
         .from('users')
-        .select('pi_uid')
+        .select('username')
         .eq('id', paymentRequest.userId)
         .maybeSingle();
       if (payerError) {
         log.error(`${FN}.verify.user_lookup_error`, { stage: 'lookup', code: payerError.code });
         return 'error';
       }
-      const signedInPiUid = payer?.pi_uid ?? null;
-      if (signedInPiUid && piUserUid && signedInPiUid === piUserUid) return 'match';
+      const signedInUsername = payer?.username ?? null;
+      if (
+        piUserUid &&
+        piMe.uid === piUserUid &&
+        signedInUsername &&
+        piMe.username.toLowerCase() === signedInUsername.toLowerCase()
+      ) {
+        return 'match';
+      }
       log.error(`${FN}.verify.payment_user_mismatch`, {
         stage: 'validation',
         piUserUid: shortUid(piUserUid),
-        signedInPiUid: shortUid(signedInPiUid),
+        piMeUid: shortUid(piMe.uid),
+        piMeUsername: shortUid(piMe.username),
+        signedInUsername: shortUid(signedInUsername),
       });
       return 'mismatch';
     };
@@ -375,6 +439,9 @@ Deno.serve(async (req) => {
         };
       }
       const payer = await checkPayer(piPayment.userUid);
+      if (payer === 'token_invalid') {
+        return { response: respond({ ...PI_TOKEN_INVALID, paymentId: paymentRequest.paymentId, txid }, 401) };
+      }
       if (payer === 'error') {
         return { response: respond({ success: false, message: 'Payment processing failed. Please try again.' }, 500) };
       }
@@ -631,6 +698,12 @@ Deno.serve(async (req) => {
         success: false,
         message: 'Payment was cancelled and cannot be completed',
       }, 409);
+    }
+
+    // Before Pi is told to complete and the row is marked, so an expired token changes nothing and
+    // a retry can work
+    if (!(await getPiMe())) {
+      return respond({ ...PI_TOKEN_INVALID, paymentId: paymentRequest.paymentId, txid: paymentRequest.txid }, 401);
     }
 
     log.info(`${FN}.pi_api.call`, { stage: 'pi_api' });
