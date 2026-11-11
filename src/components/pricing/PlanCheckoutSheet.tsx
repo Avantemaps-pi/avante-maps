@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
 import { OVERLAY_MOTION, SHEET_MOTION } from '@/components/chat/QuickActionsSheet';
+import { WALLET_ACTIVITY_QUERY_KEY } from '@/components/settings/PaymentHistory';
 import { payFromBalance } from '@/api/payments';
 import { useAuth } from '@/context/auth';
 import { usePiPrice } from '@/hooks/usePiPrice';
@@ -94,7 +95,9 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
       attempt.current = null;
       onOpenChange(false);
       toast.success(`${tier.name} plan active`);
+      // The Wallet's balance and Recent activity (the "Paid from balance" row), not up to a minute late
       queryClient.invalidateQueries({ queryKey: WALLET_BALANCE_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: [WALLET_ACTIVITY_QUERY_KEY] });
       refreshUserData(true).catch((error) => secureLog.warn('Refresh after paying from balance failed', error));
     } else if (result.status === 'insufficient') {
       toast.error('Not enough balance');
