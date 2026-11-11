@@ -66,6 +66,15 @@ const matches = (row: Row, params: URLSearchParams) => {
       if (op === 'eq' && text !== value) return false;
       continue;
     }
+    // A JSON field as JSON (column->key): booleans and numbers compare by their text
+    if (key.includes('->')) {
+      const [column, field] = key.split('->');
+      const json = row[column!] as Record<string, unknown> | null | undefined;
+      if (op === 'eq' && JSON.stringify(json?.[field!] ?? null) !== value) {
+        return false;
+      }
+      continue;
+    }
     if (op === 'eq' && String(row[key]) !== value) return false;
     // ISO timestamps compare correctly as strings
     if (op === 'lt' && !(String(row[key]) < value)) return false;

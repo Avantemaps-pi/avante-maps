@@ -16,6 +16,7 @@ const OWNER_PI_UID = 'pi-uid-owner-0001';
 const OWNER_USERNAME = 'JordynDaniel';
 const PI_TOKEN = 'pi-access-token-0001';
 const PAYMENT_ID = 'pay_1';
+const MAINNET_KEY = 'test-pi-mainnet-key';
 const TXID = 'abc123';
 
 const test = (name: string, fn: () => Promise<void>) =>
@@ -55,6 +56,8 @@ interface SetupOptions {
   creditFailures?: number;
   /** How many message_fees writes fail first */
   feeFailures?: number;
+  /** With both apps' keys set: the app that has the payment (the other key gets 404 payment_not_found) */
+  piApp?: 'testnet' | 'mainnet';
 }
 
 function setup(options: SetupOptions = {}) {
@@ -62,6 +65,8 @@ function setup(options: SetupOptions = {}) {
   const credits: Row[] = [];
   const meAuth: (string | null)[] = [];
   const piCompletes: string[] = [];
+  // Every Pi payments call as "action:app", the app being the one whose key made it
+  const piByApp: string[] = [];
   let meFailures = options.meFailures ?? 0;
   let piGetFailures = options.piGetFailures ?? 0;
   let creditFailures = options.creditFailures ?? 0;
@@ -91,6 +96,23 @@ function setup(options: SetupOptions = {}) {
           return new Response('expired', { status: 401 });
         }
         return Response.json(options.me ?? { uid: OWNER_PI_UID, username: OWNER_USERNAME });
+      }
+      const key = (
+        new Headers(init?.headers).get('authorization') ?? ''
+      ).replace('Key ', '');
+      const keyApp =
+        key === 'test-pi-key'
+          ? 'testnet'
+          : key === MAINNET_KEY
+            ? 'mainnet'
+            : 'unknown key';
+      const action = url.pathname.split('/').pop();
+      piByApp.push(`${action === PAYMENT_ID ? 'get' : action}:${keyApp}`);
+      if (options.piApp && keyApp !== options.piApp) {
+        return Response.json(
+          { error: 'payment_not_found', error_message: 'Payment not found' },
+          { status: 404 },
+        );
       }
       if (url.pathname.endsWith('/complete')) piCompletes.push(url.pathname);
       if (url.pathname.endsWith('/complete') && options.piAlreadyCompleted) {
@@ -154,6 +176,7 @@ function setup(options: SetupOptions = {}) {
     credits,
     meAuth,
     piCompletes,
+    piByApp,
     row: () => fake.tables['payments']![0],
     notifications: () => fake.tables['notifications']!,
     ledger: () => fake.tables['wallet_ledger']!,
@@ -770,5 +793,107 @@ test('the plan granted twice in a row for one payment (the database says false t
   assertEquals(rpcCalls.length, 2);
   assertEquals((row()!['status'] as Row)['plan_activated'], true);
   assertEquals(notifications().map((n) => (n['metadata'] as Row)['kind']), ['plan_paid']);
+  fake.restore();
+});
+
+// ---- Both Pi apps: each key sees only its own app's payments (Pi says 404 payment_not_found)
+
+// Runs fn with PI_MAINNET_API_KEY set, collecting the function's log lines
+async function withMainnetKey<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; logs: string }> {
+  Deno.env.set('PI_MAINNET_API_KEY', MAINNET_KEY);
+  const lines: string[] = [];
+  const real = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+    info: console.info,
+  };
+  const keep = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+  Object.assign(console, { log: keep, warn: keep, error: keep, info: keep });
+  try {
+    return { result: await fn(), logs: lines.join('\n') };
+  } finally {
+    Object.assign(console, real);
+    Deno.env.delete('PI_MAINNET_API_KEY');
+  }
+}
+
+test('a plan only the mainnet key can see: found, completed and re-read with the mainnet key, granted once', async () => {
+  const { fake, piByApp, rpcCalls, row } = setup({ piApp: 'mainnet' });
+  const { result, logs } = await withMainnetKey(() => call(PLAN));
+  assertEquals([result.status, result.json.success], [200, true]);
+  assertEquals(piByApp, [
+    'get:testnet',
+    'get:mainnet',
+    'complete:mainnet',
+    'get:mainnet',
+  ]);
+  assertEquals(rpcCalls.length, 1);
+  assertEquals((row()!['status'] as Row)['completed'], true);
+  assert(logs.includes('"pi_app":"mainnet"'));
+  assert(!logs.includes(MAINNET_KEY) && !logs.includes('test-pi-key'));
+  fake.restore();
+});
+
+test('a mainnet top up: completed with the mainnet key and credited', async () => {
+  const { fake, piByApp, ledger } = setup({
+    piApp: 'mainnet',
+    piAmount: 3,
+    rows: [topUpRow()],
+  });
+  const { result } = await withMainnetKey(() => call(TOPUP));
+  assertEquals([result.status, result.json.newBalance], [200, 3]);
+  assertEquals(ledger().length, 1);
+  assert(
+    piByApp.includes('complete:mainnet') &&
+      !piByApp.includes('complete:testnet'),
+  );
+  fake.restore();
+});
+
+test('both keys set, a testnet payment: the mainnet key is never used', async () => {
+  const { fake, piByApp } = setup({ piApp: 'testnet' });
+  const { result } = await withMainnetKey(() => call(PLAN));
+  assertEquals(result.status, 200);
+  assertEquals(piByApp, ['get:testnet', 'complete:testnet', 'get:testnet']);
+  fake.restore();
+});
+
+test('both keys set and Pi unreachable before completing: 502, Pi not told to complete, row untouched', async () => {
+  const { fake, piByApp, row } = setup({ piApp: 'testnet', piGetFailures: 1 });
+  const { result } = await withMainnetKey(() => call(PLAN));
+  assertEquals(
+    [result.status, result.json.message],
+    [502, 'Unable to verify payment'],
+  );
+  assertEquals(piByApp, ['get:testnet']);
+  assertEquals(row()!['status'], APPROVED);
+  // A retry carries on
+  const retry = await withMainnetKey(() => call(PLAN));
+  assertEquals(retry.result.status, 200);
+  fake.restore();
+});
+
+test('a mainnet completed row being recovered: re-read with the mainnet key', async () => {
+  const { fake, piByApp, rpcCalls } = setup({
+    piApp: 'mainnet',
+    rows: [
+      approvedRow({
+        status: {
+          approved: true,
+          verified: true,
+          completed: true,
+          cancelled: false,
+        },
+        txid: TXID,
+      }),
+    ],
+  });
+  const { result } = await withMainnetKey(() => call(PLAN));
+  assertEquals(result.status, 200);
+  assertEquals(piByApp, ['get:testnet', 'get:mainnet']);
+  assertEquals(rpcCalls.length, 1);
   fake.restore();
 });

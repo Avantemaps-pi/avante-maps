@@ -401,3 +401,188 @@ test('OPTIONS allows the correlation headers the app sends', async () => {
     assert(allowed.includes(header), `${header} is no longer allowed`);
   }
 });
+
+// ---- Both Pi apps: each key sees only its own app's payments (Pi says 404 payment_not_found)
+
+const MAINNET_KEY = 'test-pi-mainnet-key';
+const NOT_FOUND = {
+  error: 'payment_not_found',
+  error_message: 'Payment not found',
+};
+
+// Pi with both apps' keys set: the payment exists only in `app`. Calls are recorded as
+// "action:app", the app being the one whose key made the call
+function setupTwoApps(options: {
+  app: 'testnet' | 'mainnet' | 'neither';
+  piAmount?: number;
+  piUserUid?: string;
+  rows?: Row[];
+}) {
+  Deno.env.set('PI_MAINNET_API_KEY', MAINNET_KEY);
+  const piCalls: string[] = [];
+  const fake = installFakeSupabase({
+    tables: {
+      pi_price: [{ id: 1, price_usd: 0.0767 }],
+      payments: options.rows ?? [],
+      users: [{ id: OWNER, pi_uid: OWNER_PI_UID, username: OWNER_USERNAME }],
+    },
+    users: { 'owner-token': OWNER },
+    external: (url, init) => {
+      if (url.host !== 'api.minepi.com') return undefined;
+      if (url.pathname === '/v2/me')
+        return Response.json({ uid: OWNER_PI_UID, username: OWNER_USERNAME });
+      const key = (
+        new Headers(init?.headers).get('authorization') ?? ''
+      ).replace('Key ', '');
+      const app =
+        key === 'test-pi-key'
+          ? 'testnet'
+          : key === MAINNET_KEY
+            ? 'mainnet'
+            : 'unknown key';
+      const action = url.pathname.split('/').pop();
+      piCalls.push(`${action === PAYMENT_ID ? 'get' : action}:${app}`);
+      if (app !== options.app) return Response.json(NOT_FOUND, { status: 404 });
+      if (action === PAYMENT_ID) {
+        return Response.json({
+          identifier: PAYMENT_ID,
+          amount: options.piAmount ?? 65.19,
+          user_uid: options.piUserUid ?? OWNER_PI_UID,
+        });
+      }
+      return Response.json({ identifier: PAYMENT_ID });
+    },
+  });
+  return {
+    piCalls,
+    row: () =>
+      fake.tables['payments']!.find((r) => r['payment_id'] === PAYMENT_ID),
+    restore: () => {
+      fake.restore();
+      Deno.env.delete('PI_MAINNET_API_KEY');
+    },
+  };
+}
+
+// The function's log lines during fn
+async function logsOf<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; logs: string }> {
+  const lines: string[] = [];
+  const real = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+    info: console.info,
+  };
+  const keep = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+  Object.assign(console, { log: keep, warn: keep, error: keep, info: keep });
+  try {
+    return { result: await fn(), logs: lines.join('\n') };
+  } finally {
+    Object.assign(console, real);
+  }
+}
+
+test('a payment only the mainnet key can see: found with it, and approved with it', async () => {
+  const two = setupTwoApps({ app: 'mainnet' });
+  try {
+    const { result, logs } = await logsOf(() => call(PLAN, 65.19));
+    assertEquals([result.status, result.json.success], [200, true]);
+    assertEquals(two.piCalls, [
+      'get:testnet',
+      'get:mainnet',
+      'approve:mainnet',
+    ]);
+    assertEquals((two.row()!['status'] as Row)['approved'], true);
+    assert(logs.includes('"pi_app":"mainnet"'));
+    assert(!logs.includes(MAINNET_KEY) && !logs.includes('test-pi-key'));
+  } finally {
+    two.restore();
+  }
+});
+
+test('a mainnet plan paid below the price: cancelled with the mainnet key', async () => {
+  const two = setupTwoApps({ app: 'mainnet', piAmount: 5 });
+  try {
+    const { status, json } = await call(PLAN, 5);
+    assertEquals([status, json.error_code], [400, 'amount_mismatch']);
+    assertEquals(two.piCalls, ['get:testnet', 'get:mainnet', 'cancel:mainnet']);
+  } finally {
+    two.restore();
+  }
+});
+
+test('a mainnet payment from another Pi account: payment_user_mismatch, cancelled with the mainnet key', async () => {
+  const two = setupTwoApps({
+    app: 'mainnet',
+    piUserUid: 'pi-uid-someone-else',
+  });
+  try {
+    const { status, json } = await call(PLAN, 65.19);
+    assertEquals([status, json.error_code], [403, 'payment_user_mismatch']);
+    assertEquals(two.piCalls, ['get:testnet', 'get:mainnet', 'cancel:mainnet']);
+  } finally {
+    two.restore();
+  }
+});
+
+test('both keys set, a testnet payment: the mainnet key is never used', async () => {
+  const two = setupTwoApps({ app: 'testnet' });
+  try {
+    const { status } = await call(PLAN, 65.19);
+    assertEquals(status, 200);
+    assertEquals(two.piCalls, ['get:testnet', 'approve:testnet']);
+  } finally {
+    two.restore();
+  }
+});
+
+test('neither app has it: 502 as before, nothing approved, the row left pending', async () => {
+  const two = setupTwoApps({ app: 'neither' });
+  try {
+    const { result, logs } = await logsOf(() => call(PLAN, 65.19));
+    assertEquals(
+      [result.status, result.json.message],
+      [502, 'Unable to verify payment'],
+    );
+    assertEquals(two.piCalls, ['get:testnet', 'get:mainnet']);
+    assertEquals((two.row()!['status'] as Row)['cancelled'], false);
+    // #172's line, with Pi's error body
+    assert(
+      logs.includes('get_payment_failed') && logs.includes('payment_not_found'),
+    );
+  } finally {
+    two.restore();
+  }
+});
+
+test('a stale mainnet row: cancelled at Pi with the mainnet key before approving again', async () => {
+  const stale = {
+    payment_id: PAYMENT_ID,
+    user_id: OWNER,
+    amount: 65.19,
+    metadata: PLAN,
+    status: {
+      approved: false,
+      verified: false,
+      completed: false,
+      cancelled: false,
+    },
+    created_at: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+  };
+  const two = setupTwoApps({ app: 'mainnet', rows: [stale] });
+  try {
+    await call(PLAN, 65.19);
+    assertEquals(two.piCalls.slice(0, 3), [
+      'get:testnet',
+      'get:mainnet',
+      'cancel:mainnet',
+    ]);
+    assert(
+      !two.piCalls.some((c) => c.endsWith(':testnet') && !c.startsWith('get')),
+    );
+  } finally {
+    two.restore();
+  }
+});

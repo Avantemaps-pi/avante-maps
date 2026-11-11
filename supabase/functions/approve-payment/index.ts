@@ -3,6 +3,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 import { AMOUNT_TOLERANCE, getExpectedPlanPi } from '../_shared/prices.ts';
+import { createPiPayments, type PiAppClient } from '../_shared/piPaymentsClient.ts';
 import {
   getOrCreateLifecycleId,
   makeLogger,
@@ -141,8 +142,9 @@ Deno.serve(async (req) => {
       return respond({ ...PI_TOKEN_MISSING, paymentId: paymentRequest.paymentId }, 400);
     }
 
-    const piApiKey = Deno.env.get('PI_API_KEY');
-    if (!piApiKey) {
+    // Testnet and Mainnet app keys: each Pi call for this payment uses the app that has it
+    const piPayments = createPiPayments();
+    if (!piPayments) {
       log.error(`${FN}.config.missing_api_key`, { stage: 'error' });
       return respond({ success: false, message: 'Payment service not configured' }, 500);
     }
@@ -197,14 +199,12 @@ Deno.serve(async (req) => {
     if (existingPayment && isStalePayment(existingPayment)) {
       log.warn(`${FN}.stale.detected`, { stage: 'lookup' });
       try {
-        const piNetworkApiUrl = 'https://api.minepi.com/v2/payments';
-        await fetch(`${piNetworkApiUrl}/${paymentRequest.paymentId}/cancel`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Key ${piApiKey}`,
-            'Content-Type': 'application/json',
-          },
-        });
+        const located = await piPayments.findClient(paymentRequest.paymentId);
+        if (located.ok) {
+          await located.client.cancel(paymentRequest.paymentId);
+        } else {
+          log.warn(`${FN}.stale.pi_lookup_failed`, { stage: 'pi_api', pi_app: located.app, status: located.status });
+        }
 
         await supabaseClient.from('payments').update({
           status: {
@@ -287,17 +287,14 @@ Deno.serve(async (req) => {
     // payment to both. A retry may send different metadata from the first attempt's row
     let approvedPlanFields: { approved_amount_pi: number; metadata: typeof paymentRequest.metadata } | null = null;
 
+    // The app that has this payment, once Pi has returned it below
+    let piClient: PiAppClient | null = null;
+
     // Cancels the payment at Pi and marks the row, for a payment that mustn't be approved
     const cancelAtPi = async (error: string) => {
       try {
-        const cancelResponse = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}/cancel`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Key ${piApiKey}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (!cancelResponse.ok) {
+        const cancelResponse = piClient ? await piClient.cancel(paymentRequest.paymentId) : null;
+        if (cancelResponse && !cancelResponse.ok) {
           log.warn(`${FN}.pi_api.cancel_failed`, { stage: 'pi_api', status: cancelResponse.status });
         }
       } catch (cancelError) {
@@ -325,28 +322,27 @@ Deno.serve(async (req) => {
     let piUserUid: string | null = null;
     let piFetched = false;
     try {
-      const piGetResp = await fetch(`https://api.minepi.com/v2/payments/${paymentRequest.paymentId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Key ${piApiKey}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      if (piGetResp.ok) {
-        const piPayment = await piGetResp.json();
+      // Each configured app's key in turn, the next only after Pi says payment_not_found
+      const found = await piPayments.getPayment(paymentRequest.paymentId);
+      if (found.ok) {
+        const piPayment = found.payment;
         piFetched = true;
+        piClient = found.client;
+        log.extend({ pi_app: found.app });
         const amt = Number(piPayment?.amount);
         if (Number.isFinite(amt) && amt > 0) piAmount = amt;
         piUserUid = typeof piPayment?.user_uid === 'string' && piPayment.user_uid ? piPayment.user_uid : null;
+      } else if (found.reason === 'network') {
+        log.warn(`${FN}.pi_api.get_payment_exception`, { stage: 'pi_api', pi_app: found.app, message: found.message });
       } else {
         // Pi's own error text (never the key): says whether it rejects the key or can't see the payment
-        const piErrorBody = (await piGetResp.text().catch(() => '')).slice(0, 300);
         log.warn(`${FN}.pi_api.get_payment_failed`, {
           stage: 'pi_api',
-          status: piGetResp.status,
-          piErrorBody,
-          keyLength: piApiKey.length,
-          keyHasWhitespace: /\s/.test(piApiKey),
+          pi_app: found.app,
+          status: found.status,
+          piErrorBody: found.piErrorBody,
+          keyLength: found.keyLength,
+          keyHasWhitespace: found.keyHasWhitespace,
         });
       }
     } catch (getErr) {
@@ -357,7 +353,7 @@ Deno.serve(async (req) => {
     }
 
     // Left pending, so approving again can still work
-    if (!piFetched) {
+    if (!piFetched || !piClient) {
       log.error(`${FN}.verify.payment_unavailable`, { stage: 'pi_api' });
       return respond({ success: false, message: 'Unable to verify payment' }, 502);
     }
@@ -442,14 +438,7 @@ Deno.serve(async (req) => {
 
     log.info(`${FN}.pi_api.call`, { stage: 'pi_api' });
     try {
-      const piNetworkApiUrl = 'https://api.minepi.com/v2/payments';
-      const approveResponse = await fetch(`${piNetworkApiUrl}/${paymentRequest.paymentId}/approve`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Key ${piApiKey}`,
-          'Content-Type': 'application/json',
-        },
-      });
+      const approveResponse = await piClient.approve(paymentRequest.paymentId);
 
       const approveResult = await approveResponse.json();
       log.info(`${FN}.pi_api.response`, {
