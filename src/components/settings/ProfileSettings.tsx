@@ -1,7 +1,9 @@
 
-import React from 'react';
+import React, { useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { useAutoGrow } from '@/hooks/useAutoGrow';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useNavigate } from '@/lib/router-compat';
@@ -19,6 +21,9 @@ const ProfileSettings = ({
   isLoading
 }: ProfileSettingsProps) => {
   const navigate = useNavigate();
+  // The whole wallet address, wrapping rather than cut off
+  const walletRef = useRef<HTMLTextAreaElement | null>(null);
+  useAutoGrow(walletRef, `${isLoading}:${user?.walletAddress ?? ''}`);
 
   const formatSubscriptionTier = (tier: string = 'individual') => {
     return tier.charAt(0).toUpperCase() + tier.slice(1).replace('-', ' ');
@@ -60,14 +65,16 @@ const ProfileSettings = ({
           {isLoading ? (
             <Skeleton className="h-9 w-full" />
           ) : (
-            <Input
+            <Textarea
+              ref={walletRef}
               id="wallet"
               name="wallet"
               placeholder="Not provided"
               value={user?.walletAddress || ''}
               readOnly
+              rows={1}
               autoComplete="off"
-              className="bg-muted h-9"
+              className="min-h-9 resize-none overflow-hidden break-all bg-muted py-1.5 font-mono text-sm sm:text-sm"
             />
           )}
           <p className="text-xs text-muted-foreground mt-1">

@@ -502,3 +502,59 @@ test('the Owner tab shows the Pi username as text, with no username input', asyn
   ).toBeVisible();
   await expect(page.getByRole('textbox', { name: /username/i })).toHaveCount(0);
 });
+
+// ---- The Pi wallet address is shown in full (56 characters wrap; nothing is cut off)
+
+const FULL_WALLET = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
+
+test('at 360px the whole 56-character address is visible, wrapping onto a second line', async ({
+  page,
+}) => {
+  expect(FULL_WALLET).toHaveLength(56);
+  await page.setViewportSize({ width: 360, height: 780 });
+  await setup(page, { ...ROW, pi_wallet_address: FULL_WALLET });
+  await page.goto(`/update-registration/${ID}`);
+  await tab(page, 'Details').tap();
+  const field = page.locator('#piWalletAddress');
+  await expect(field).toHaveValue(FULL_WALLET);
+  // Nothing scrolls inside the field, either way
+  const fit = await field.evaluate((el) => ({
+    sideways: el.scrollWidth <= el.clientWidth,
+    downwards: el.scrollHeight <= el.clientHeight + 1,
+    lines: Math.round(
+      el.clientHeight / parseFloat(getComputedStyle(el).lineHeight),
+    ),
+    font: getComputedStyle(el).fontFamily,
+  }));
+  expect(fit.sideways).toBe(true);
+  expect(fit.downwards).toBe(true);
+  expect(fit.lines).toBeGreaterThanOrEqual(2);
+  expect(fit.font).toMatch(/mono/i);
+  const noSideways = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  );
+  expect(noSideways).toBe(true);
+});
+
+test('Enter adds no new line, and a pasted address with spaces is saved without them', async ({
+  page,
+}) => {
+  const { patches } = await setup(page);
+  await page.goto(`/update-registration/${ID}`);
+  await tab(page, 'Details').tap();
+  const field = page.locator('#piWalletAddress');
+  await field.click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await expect(field).toHaveValue(WALLET);
+
+  // As pasted from a wallet app: spaced groups and a trailing newline
+  await field.fill('');
+  await page.keyboard.insertText(
+    `${FULL_WALLET.slice(0, 20)} ${FULL_WALLET.slice(20, 40)}  ${FULL_WALLET.slice(40)}\n`,
+  );
+  await expect(field).toHaveValue(FULL_WALLET);
+  await submit(page);
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]!['pi_wallet_address']).toBe(FULL_WALLET);
+});
