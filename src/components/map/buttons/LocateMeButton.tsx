@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { secureLog } from '@/utils/secureLogger';
 import { useKeyboardOpen } from '@/hooks/useKeyboardOpen';
 import { hasGranted, markGranted, clearGranted } from '@/lib/gpsGrant';
+import { peekIpLocation, rememberIpLocation } from '@/hooks/useIpLocationFocus';
 
 const isPiBrowser = () => typeof window !== 'undefined' && !!(window as any).Pi;
 const logCtx = () => ({
@@ -13,11 +14,7 @@ const logCtx = () => ({
   online: typeof navigator !== 'undefined' ? navigator.onLine : null,
 });
 
-const CACHE_KEY = 'ip_location_cache_v1';
-const TTL_MS = 24 * 60 * 60 * 1000;
 const TOAST_ID = 'locate-me';
-
-interface CachedLocation { lat: number; lng: number; ts: number }
 
 const dispatchCenter = (lat: number, lng: number) => {
   window.dispatchEvent(new CustomEvent('centerMap', { detail: { lat, lng, zoom: 15 } }));
@@ -116,7 +113,8 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
     });
     const res = await fetchIpLocation();
     if (res) {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ ...res, ts: Date.now() }));
+      // Kept in memory for this page load, never in browser storage
+      rememberIpLocation(res);
       dispatchCenter(res.lat, res.lng);
       toast.success('Centred on your approximate location', { id: TOAST_ID });
     } else {
@@ -220,19 +218,12 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
         secureLog.info('LocateMe: skipping repeat geolocation prompt — using IP fallback', logCtx());
       }
 
-      // Fallback: cached IP location
-      try {
-        const raw = localStorage.getItem(CACHE_KEY);
-        if (raw) {
-          const cached: CachedLocation = JSON.parse(raw);
-          if (Date.now() - cached.ts < TTL_MS) {
-            dispatchCenter(cached.lat, cached.lng);
-            toast.success('Centred on your approximate location', { id: TOAST_ID });
-            return;
-          }
-        }
-      } catch {
-        // ignore
+      // Fallback: the IP location already found this page load
+      const known = peekIpLocation();
+      if (known) {
+        dispatchCenter(known.lat, known.lng);
+        toast.success('Centred on your approximate location', { id: TOAST_ID });
+        return;
       }
 
       await useIpFallback();

@@ -5,32 +5,40 @@ import {
   GPS_AUTOCENTRE_FAILED_EVENT,
 } from '@/lib/gpsGrant';
 
-const CACHE_KEY = 'ip_location_cache_v1';
 const SESSION_KEY = 'ip_location_focused';
-const TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
-interface CachedLocation {
-  lat: number;
-  lng: number;
-  ts: number;
+type LatLng = { lat: number; lng: number };
+
+// The IP location is kept in memory for this page load only, never in browser storage (a
+// location is sensitive). Earlier versions saved it under this key; it's removed on first use
+const OLD_STORAGE_KEY = 'ip_location_cache_v1';
+let oldCopyRemoved = false;
+const removeOldStoredCopy = () => {
+  if (oldCopyRemoved) return;
+  oldCopyRemoved = true;
+  try {
+    localStorage.removeItem(OLD_STORAGE_KEY);
+  } catch {
+    // storage unavailable
+  }
+};
+
+let known: LatLng | null = null;
+let lookup: Promise<LatLng | null> | null = null;
+
+/** The IP location found earlier in this page load, if any (no request) */
+export function peekIpLocation(): LatLng | null {
+  removeOldStoredCopy();
+  return known;
 }
 
-/** The approximate location from the IP address (cached for 24h), or null if it can't be found */
-export async function getIpLocation(): Promise<{
-  lat: number;
-  lng: number;
-} | null> {
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (raw) {
-      const cached: CachedLocation = JSON.parse(raw);
-      if (Date.now() - cached.ts < TTL_MS)
-        return { lat: cached.lat, lng: cached.lng };
-    }
-  } catch {
-    // ignore
-  }
+/** Keeps an IP location found another way (LocateMe's providers) for the rest of the page load */
+export function rememberIpLocation(location: LatLng) {
+  removeOldStoredCopy();
+  known = location;
+}
 
+const lookUpIpLocation = async (): Promise<LatLng | null> => {
   try {
     const res = await fetch(
       'https://ipwho.is/?fields=success,latitude,longitude',
@@ -42,24 +50,28 @@ export async function getIpLocation(): Promise<{
       typeof data.latitude === 'number' &&
       typeof data.longitude === 'number'
     ) {
-      try {
-        localStorage.setItem(
-          CACHE_KEY,
-          JSON.stringify({
-            lat: data.latitude,
-            lng: data.longitude,
-            ts: Date.now(),
-          }),
-        );
-      } catch {
-        // ignore
-      }
       return { lat: data.latitude, lng: data.longitude };
     }
   } catch {
     // silent fail — non-blocking
   }
   return null;
+};
+
+/**
+ * The approximate location from the IP address, or null if it can't be found. Looked up at most
+ * once per page load: callers at the same time share one request, and a failure isn't kept, so a
+ * later call tries again
+ */
+export function getIpLocation(): Promise<LatLng | null> {
+  removeOldStoredCopy();
+  if (known) return Promise.resolve(known);
+  lookup ??= lookUpIpLocation().then((found) => {
+    lookup = null;
+    if (found) known = found;
+    return found;
+  });
+  return lookup;
 }
 
 /**
@@ -78,6 +90,8 @@ export function useIpLocationFocus(
   const homeLng = home?.lng;
 
   useEffect(() => {
+    // Clears a copy saved by an earlier version, even when nothing is looked up below
+    removeOldStoredCopy();
     if (!enabled) return;
     if (sessionStorage.getItem(SESSION_KEY) === '1') return;
 

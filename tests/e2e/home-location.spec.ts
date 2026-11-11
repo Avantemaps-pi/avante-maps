@@ -392,3 +392,68 @@ test('signed out: no sheet (the landing page)', async ({ page }) => {
   await page.waitForTimeout(2000);
   await expect(sheet(page)).toHaveCount(0);
 });
+
+// ---- The IP location is never saved in browser storage (CodeQL: clear-text storage of a location)
+
+test('the IP location is looked up once per page load and never saved in storage', async ({
+  page,
+}) => {
+  await setup(page, { gps: 'denied' });
+  let ipLookups = 0;
+  // After mockMap's route, so this one answers (and counts)
+  await page.route('https://ipwho.is/**', (route) => {
+    ipLookups += 1;
+    return route.fulfill({
+      json: { success: true, latitude: IP.lat, longitude: IP.lng },
+    });
+  });
+  await page.goto('/');
+  // Two callers in this page load: the map focus (no GPS, no home) and the sheet's pin
+  await expect(sheet(page)).toBeVisible({ timeout: 20_000 });
+  await expect
+    .poll(() => centers(page), { timeout: 20_000 })
+    .toContainEqual(IP);
+  await expect(
+    sheet(page).locator('[data-home-picker] .leaflet-marker-icon'),
+  ).toBeVisible();
+  expect(ipLookups).toBe(1);
+  const stored = await page.evaluate(() => {
+    const all = { ...localStorage, ...sessionStorage } as Record<
+      string,
+      string
+    >;
+    return {
+      key: localStorage.getItem('ip_location_cache_v1'),
+      withCoords: Object.entries(all)
+        .filter(
+          ([, v]) => v.includes(String(48.8566)) || v.includes(String(2.3522)),
+        )
+        .map(([k]) => k),
+    };
+  });
+  expect(stored).toEqual({ key: null, withCoords: [] });
+});
+
+test('a copy saved by an earlier version is removed on first use, and not used', async ({
+  page,
+}) => {
+  await setup(page, { gps: 'denied' });
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('__old_seeded')) return;
+    sessionStorage.setItem('__old_seeded', '1');
+    localStorage.setItem(
+      'ip_location_cache_v1',
+      JSON.stringify({ lat: 1.5, lng: 2.5, ts: Date.now() }),
+    );
+  });
+  await page.goto('/');
+  await expect
+    .poll(() =>
+      page.evaluate(() => localStorage.getItem('ip_location_cache_v1')),
+    )
+    .toBeNull();
+  await expect
+    .poll(() => centers(page), { timeout: 20_000 })
+    .toContainEqual(IP);
+  expect(await centers(page)).not.toContainEqual({ lat: 1.5, lng: 2.5 });
+});
