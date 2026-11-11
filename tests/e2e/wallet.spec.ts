@@ -8,7 +8,13 @@
 import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, NEARBY_BUSINESSES, mockUser, STORAGE_KEY } from './helpers/mapMocks';
 
-test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
+test.use({
+  viewport: { width: 375, height: 812 },
+  hasTouch: true,
+  isMobile: true,
+  // Times in Recent activity are local: fixed here so they read the same on any machine
+  timezoneId: 'Africa/Johannesburg',
+});
 
 const SUPABASE = 'https://xvpwbocwasbtzrzrxyvu.supabase.co';
 const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -298,15 +304,17 @@ test('a top up, a Pi Wallet plan and a balance spend: labelled, newest first, no
   await expect(rows).toHaveCount(3);
 
   await expect(rows.nth(0)).toContainText('Small Business plan');
-  await expect(rows.nth(0)).toContainText('Plan · Paid from balance · 3 Nov');
+  await expect(rows.nth(0)).toContainText(
+    'Plan · Paid from balance · 3 Nov · 11:00',
+  );
   await expect(rows.nth(0)).toContainText('− 16.40 π');
 
   await expect(rows.nth(1)).toContainText('Small Business plan');
-  await expect(rows.nth(1)).toContainText('Plan · 2 Nov · Completed');
+  await expect(rows.nth(1)).toContainText('Plan · 2 Nov · 11:00 · Completed');
   await expect(rows.nth(1)).toContainText('− 65.19 π');
 
   await expect(rows.nth(2)).toContainText('Top up');
-  await expect(rows.nth(2)).toContainText('1 Nov · Completed');
+  await expect(rows.nth(2)).toContainText('1 Nov · 11:00 · Completed');
   await expect(rows.nth(2)).toContainText('+ 40.00 π');
 
   await expect(page.getByText('Your 10 most recent payments.')).toBeVisible();
@@ -345,7 +353,7 @@ test('other kinds: Message fee, the memo, Payment, Payment from balance', async 
   await expect(rows.nth(0)).toContainText('− 0.10 π');
   await expect(rows.nth(1)).toContainText('Message fee');
   await expect(rows.nth(2)).toContainText('Something else');
-  await expect(rows.nth(2)).toContainText('Payment · 28 Oct · Completed');
+  await expect(rows.nth(2)).toContainText('Payment · 28 Oct · 11:00 · Completed');
   await expect(rows.nth(3).getByText('Payment', { exact: true })).toBeVisible();
 });
 
@@ -375,11 +383,15 @@ test('Pending, for a payment that is approved or only just created', async ({ pa
     ],
   });
   await page.goto('/wallet');
-  await expect(activityRows(page).nth(0)).toContainText('2 Nov · Pending');
-  await expect(activityRows(page).nth(1)).toContainText('1 Nov · Pending');
+  await expect(activityRows(page).nth(0)).toContainText(
+    '2 Nov · 11:00 · Pending',
+  );
+  await expect(activityRows(page).nth(1)).toContainText(
+    '1 Nov · 11:00 · Pending',
+  );
 });
 
-test('a refund and a balance adjustment: labelled, + in primary, date only, sorted with the rest', async ({ page }) => {
+test('a refund and a balance adjustment: labelled, + in primary, date and time, sorted with the rest', async ({ page }) => {
   await setup(page, {
     payments: [TOP_UP],
     ledger: [
@@ -393,16 +405,69 @@ test('a refund and a balance adjustment: labelled, + in primary, date only, sort
   await expect(rows).toHaveCount(4);
   await expect(rows.nth(0)).toContainText('Refund');
   await expect(rows.nth(0)).toContainText('+ 5.00 π');
-  await expect(rows.nth(0).getByText('4 Nov', { exact: true })).toBeVisible();
+  await expect(
+    rows.nth(0).getByText('4 Nov · 11:00', { exact: true }),
+  ).toBeVisible();
   await expect(rows.nth(1)).toContainText('− 16.40 π');
   await expect(rows.nth(2)).toContainText('Top up');
   await expect(rows.nth(3)).toContainText('Balance adjustment');
   await expect(rows.nth(3)).toContainText('+ 2.50 π');
-  await expect(rows.nth(3).getByText('31 Oct', { exact: true })).toBeVisible();
+  await expect(
+    rows.nth(3).getByText('31 Oct · 11:00', { exact: true }),
+  ).toBeVisible();
   // The same colour as a top up's +
   const plus = await rows.nth(2).getByText('+ 40.00 π').evaluate((el) => getComputedStyle(el).color);
   await expect(rows.nth(0).getByText('+ 5.00 π')).toHaveCSS('color', plus);
   await expect(rows.nth(3).getByText('+ 2.50 π')).toHaveCSS('color', plus);
+});
+
+// Local time (this spec runs in Africa/Johannesburg, UTC+2), 24-hour, with the year only when it
+// isn't this one
+test('each row shows the local date and time: 13:12 UTC reads 11 Nov · 15:12', async ({
+  page,
+}) => {
+  const year = new Date().getFullYear();
+  await setup(page, {
+    payments: [
+      payment(1, `${year}-11-11T13:12:00Z`, 3, { kind: 'wallet_topup' }),
+    ],
+    ledger: [{ ...BALANCE_SPEND, created_at: `${year}-11-10T22:30:00Z` }],
+  });
+  await page.goto('/wallet');
+  const rows = activityRows(page);
+  await expect(rows.nth(0)).toContainText('11 Nov · 15:12 · Completed');
+  // A ledger row too, and past midnight locally it's the next day
+  await expect(rows.nth(1)).toContainText(
+    'Plan · Paid from balance · 11 Nov · 00:30',
+  );
+});
+
+test('a row from an earlier year carries its year', async ({ page }) => {
+  const last = new Date().getFullYear() - 1;
+  await setup(page, {
+    payments: [
+      payment(1, `${last}-12-03T07:41:00Z`, 3, { kind: 'wallet_topup' }),
+    ],
+  });
+  await page.goto('/wallet');
+  await expect(activityRows(page).first()).toContainText(
+    `3 Dec ${last} · 09:41 · Completed`,
+  );
+});
+
+test('a missing or bad timestamp still shows —', async ({ page }) => {
+  await setup(page, {
+    payments: [
+      payment(1, 'not a date', 3, { kind: 'wallet_topup' }),
+      { ...payment(2, '', 4, { kind: 'wallet_topup' }), created_at: null },
+    ],
+  });
+  await page.goto('/wallet');
+  await expect(activityRows(page)).toHaveCount(2);
+  for (const i of [0, 1])
+    await expect(activityRows(page).nth(i)).toContainText(
+      'Top up— · Completed',
+    );
 });
 
 test('a deposit in the ledger does not add a second row to its top up', async ({ page }) => {
@@ -419,7 +484,9 @@ test('amount_mismatch reads "Cancelled · price changed", and its amount has no 
   await setup(page, { payments: [payment(3, '2026-11-02T09:00:00Z', 5, { subscriptionTier: 'small-business' }, { ...CANCELLED, error: 'amount_mismatch' })] });
   await page.goto('/wallet');
   const row = activityRows(page).first();
-  await expect(row).toContainText('Plan · 2 Nov · Cancelled · price changed');
+  await expect(row).toContainText(
+    'Plan · 2 Nov · 11:00 · Cancelled · price changed',
+  );
   await expect(row.getByRole('link', { name: 'Contact support' })).toHaveCount(0);
   const amount = row.getByText('5.00 π', { exact: true });
   await expect(amount).toBeVisible();
@@ -502,9 +569,9 @@ test('cancelled, voided and expired payments read "Cancelled", muted, with no si
   });
   await page.goto('/wallet');
   for (const [index, meta, amount] of [
-    [0, '3 Nov', '1.00 π'],
-    [1, 'Plan · 2 Nov', '7.00 π'],
-    [2, '1 Nov', '2.00 π'],
+    [0, '3 Nov · 11:00', '1.00 π'],
+    [1, 'Plan · 2 Nov · 11:00', '7.00 π'],
+    [2, '1 Nov · 11:00', '2.00 π'],
   ] as const) {
     const row = activityRows(page).nth(index);
     await expect(row).toContainText(`${meta} · Cancelled`);
@@ -553,7 +620,9 @@ test('opening Wallet calls cleanup once per session, with the session user, then
   await page.goto('/wallet');
   await expect.poll(() => requests.cleanup.length).toBe(1);
   expect(requests.cleanup[0]).toEqual({ userId: mockUser.uid });
-  await expect(activityRows(page).first()).toContainText('10 Nov · Cancelled');
+  await expect(activityRows(page).first()).toContainText(
+    '11 Nov · 01:07 · Cancelled',
+  );
   // Quietly: no toast
   await expect(page.getByText(/stale payments/i)).toHaveCount(0);
 
@@ -577,7 +646,9 @@ test('a cleanup that fails shows nothing, and the page works as usual', async ({
   });
   await page.goto('/wallet');
   await expect.poll(() => requests.cleanup.length).toBe(1);
-  await expect(activityRows(page).first()).toContainText('1 Nov · Completed');
+  await expect(activityRows(page).first()).toContainText(
+    '1 Nov · 11:00 · Completed',
+  );
   await expect(page.getByText(/cleanup|boom/i)).toHaveCount(0);
   expect(errors).toEqual([]);
 });
@@ -597,7 +668,9 @@ test('plan_not_activated reads "Paid · plan not activated", with the Contact su
   });
   await page.goto('/wallet');
   const row = activityRows(page).first();
-  await expect(row).toContainText('Plan · 2 Nov · Paid · plan not activated');
+  await expect(row).toContainText(
+    'Plan · 2 Nov · 11:00 · Paid · plan not activated',
+  );
   await expect(row).not.toContainText('Completed');
   await expect(row).toContainText("Contact support and we'll sort it out.");
   // The Pi moved, so the status is red and the amount isn't
@@ -615,7 +688,9 @@ test('amount_mismatch_after_completion does not read Completed, and has the Cont
   });
   await page.goto('/wallet');
   const row = activityRows(page).first();
-  await expect(row).toContainText("Plan · 2 Nov · Paid · didn't match the price");
+  await expect(row).toContainText(
+    "Plan · 2 Nov · 11:00 · Paid · didn't match the price",
+  );
   await expect(row).not.toContainText('Completed');
   await expect(row.getByRole('link', { name: 'Contact support' })).toBeVisible();
   await expect(row).toContainText('− 5.00 π');
@@ -624,7 +699,9 @@ test('amount_mismatch_after_completion does not read Completed, and has the Cont
 test('a plan with plan_activated reads Completed', async ({ page }) => {
   await setup(page, { payments: [payment(2, '2026-11-02T09:00:00Z', 65.19, { subscriptionTier: 'small-business' }, { ...COMPLETED, plan_activated: true }, { approved_amount_pi: 65.19 })] });
   await page.goto('/wallet');
-  await expect(activityRows(page).first()).toContainText('Plan · 2 Nov · Completed');
+  await expect(activityRows(page).first()).toContainText(
+    'Plan · 2 Nov · 11:00 · Completed',
+  );
   await expect(activityRows(page).first().getByRole('link', { name: 'Contact support' })).toHaveCount(0);
 });
 
