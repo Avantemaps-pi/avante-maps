@@ -142,6 +142,17 @@ test('step 1 shows "Step 1 of 4" and the progress bar', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Close registration' })).toBeVisible();
 });
 
+// users.username can't be changed by its user (the payer check compares it with Pi's)
+test('step 1 shows the Pi username as text, with no username input', async ({
+  page,
+}) => {
+  await openRegistration(page);
+  await expect(
+    page.getByText(mockUser.username, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('textbox', { name: /username/i })).toHaveCount(0);
+});
+
 test('a direct load of /registration focuses the step title', async ({ page }) => {
   await openRegistration(page);
   await expect(title(page)).toHaveText('About your business');

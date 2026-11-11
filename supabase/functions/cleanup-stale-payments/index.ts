@@ -1,6 +1,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
+import { createPiPayments } from '../_shared/piPaymentsClient.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 
 // Validation schema for cleanup request
@@ -57,8 +58,9 @@ Deno.serve(async (req) => {
     const userId = user.id;
     console.log(`Cleaning up stale payments for authenticated user`);
 
-    const piApiKey = Deno.env.get('PI_API_KEY');
-    if (!piApiKey) {
+    // Testnet and Mainnet app keys: each payment is cancelled in the app that has it
+    const piPayments = createPiPayments();
+    if (!piPayments) {
       console.error('PI_API_KEY not configured');
       return new Response(
         JSON.stringify({ success: false, message: 'Service temporarily unavailable' }),
@@ -99,17 +101,14 @@ Deno.serve(async (req) => {
       try {
         console.log(`Cleaning up stale payment: ${payment.payment_id}`);
 
-        // Try to cancel with Pi Network API
-        const piNetworkApiUrl = 'https://api.minepi.com/v2/payments';
-        const cancelResponse = await fetch(`${piNetworkApiUrl}/${payment.payment_id}/cancel`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Key ${piApiKey}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        console.log(`Pi Network cancel response for ${payment.payment_id}:`, cancelResponse.status);
+        // Try to cancel with Pi Network API, with the key of the app that has the payment
+        const located = await piPayments.findClient(payment.payment_id);
+        if (located.ok) {
+          const cancelResponse = await located.client.cancel(payment.payment_id);
+          console.log(`Pi Network cancel response for ${payment.payment_id} (pi_app ${located.client.app}):`, cancelResponse.status);
+        } else {
+          console.log(`Pi Network lookup failed for ${payment.payment_id} (pi_app ${located.app}):`, located.status ?? located.reason);
+        }
 
         // Update our database regardless of Pi Network response
         const { error: updateError } = await supabaseClient

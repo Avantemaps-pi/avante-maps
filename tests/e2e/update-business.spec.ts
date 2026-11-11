@@ -485,3 +485,20 @@ test('a business loaded without the switch column: saving leaves it out', async 
   await expect.poll(() => patches.length).toBe(1);
   expect(patches[0]).not.toHaveProperty('notify_new_message_email');
 });
+
+// users.username can't be changed by its user any more (the payer check compares it with Pi's):
+// the owner's Pi username is shown as text, never as a field to type in
+test('the Owner tab shows the Pi username as text, with no username input', async ({
+  page,
+}) => {
+  await setup(page);
+  await page.goto(`/update-registration/${ID}`);
+  await expectStoredValues(page);
+  await tab(page, 'Owner').tap();
+  const owner = page.getByRole('tabpanel', { name: 'Owner' });
+  await expect(owner.getByText('Pi Network Username')).toBeVisible();
+  await expect(
+    owner.getByText(mockUser.username, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole('textbox', { name: /username/i })).toHaveCount(0);
+});

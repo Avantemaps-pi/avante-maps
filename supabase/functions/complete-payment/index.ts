@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 import { AMOUNT_TOLERANCE, getExpectedPlanPi } from '../_shared/prices.ts';
+import { createPiPayments, type PiAppClient } from '../_shared/piPaymentsClient.ts';
 import {
   getOrCreateLifecycleId,
   makeLogger,
@@ -282,8 +283,9 @@ Deno.serve(async (req) => {
       return respond({ ...PI_TOKEN_MISSING, paymentId: paymentRequest.paymentId }, 400);
     }
 
-    const piApiKey = Deno.env.get('PI_API_KEY');
-    if (!piApiKey) {
+    // Testnet and Mainnet app keys: each Pi call for this payment uses the app that has it
+    const piPayments = createPiPayments();
+    if (!piPayments) {
       log.error(`${FN}.config.missing_api_key`, { stage: 'error' });
       return respond({ success: false, message: 'Payment service not configured' }, 500);
     }
@@ -317,24 +319,32 @@ Deno.serve(async (req) => {
       return respond({ success: false, message: 'Payment ownership mismatch' }, 403);
     }
 
-    const piNetworkApiUrl = 'https://api.minepi.com/v2/payments';
+    // The app that has this payment, once known: every later Pi call goes to it
+    let piClient: PiAppClient | null = null;
+    const bindPiApp = (client: PiAppClient) => {
+      if (piClient) return;
+      piClient = client;
+      log.extend({ pi_app: client.app });
+    };
 
     // The payment as Pi has it: the amount that moved and the Pi account that paid. null when Pi
     // can't be reached (nothing is changed then, so a retry can carry on)
     const fetchPiPayment = async (): Promise<{ amount: number | null; userUid: string | null } | null> => {
       try {
-        const piGetResp = await fetch(`${piNetworkApiUrl}/${paymentRequest.paymentId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Key ${piApiKey}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (!piGetResp.ok) {
-          log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', status: piGetResp.status });
+        // Each configured app's key in turn until one has it; then only that app's
+        const found = piClient
+          ? await piClient.getPayment(paymentRequest.paymentId)
+          : await piPayments.getPayment(paymentRequest.paymentId);
+        if (!found.ok) {
+          if (found.reason === 'network') {
+            log.warn(`${FN}.pi_api.get_payment_exception`, { stage: 'pi_api', pi_app: found.app, message: found.message });
+          } else {
+            log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', pi_app: found.app, status: found.status });
+          }
           return null;
         }
-        const piPayment = await piGetResp.json();
+        bindPiApp(found.client);
+        const piPayment = found.payment;
         const amt = Number(piPayment?.amount);
         return {
           amount: Number.isFinite(amt) && amt > 0 ? amt : null,
@@ -706,16 +716,27 @@ Deno.serve(async (req) => {
       return respond({ ...PI_TOKEN_INVALID, paymentId: paymentRequest.paymentId, txid: paymentRequest.txid }, 401);
     }
 
+    // Which app has this payment: with one key configured, that key (no call, as before); with
+    // both, Pi is asked first. Nothing is marked if it can't say, so a retry can carry on
+    let completeClient: PiAppClient | null = piClient;
+    if (!completeClient) {
+      const located = await piPayments.findClient(paymentRequest.paymentId);
+      if (!located.ok) {
+        log.warn(`${FN}.pi_api.get_payment_failed`, { stage: 'pi_api', pi_app: located.app, status: located.status });
+        return respond({
+          success: false,
+          message: 'Unable to verify payment',
+          paymentId: paymentRequest.paymentId,
+          txid: paymentRequest.txid,
+        }, 502);
+      }
+      completeClient = located.client;
+      bindPiApp(completeClient);
+    }
+
     log.info(`${FN}.pi_api.call`, { stage: 'pi_api' });
     try {
-      const completeResponse = await fetch(`${piNetworkApiUrl}/${paymentRequest.paymentId}/complete`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Key ${piApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ txid: paymentRequest.txid }),
-      });
+      const completeResponse = await completeClient.complete(paymentRequest.paymentId, paymentRequest.txid);
 
       const completeResult = await completeResponse.json();
       log.info(`${FN}.pi_api.response`, {
