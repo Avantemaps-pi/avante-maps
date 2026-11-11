@@ -33,8 +33,62 @@ export interface PaymentResult {
   message: string;
   shouldRefreshUser?: boolean;
   paymentId?: string;
-  /** Why the server refused, when it says: amount_mismatch, plan_not_activated, amount_mismatch_after_completion */
+  /**
+   * Why the server refused, when it says: amount_mismatch, plan_not_activated, amount_mismatch_after_completion.
+   * Or ours: timed_out (no result within PAYMENT_RESULT_LIMIT_MS), stopped_waiting (the caller aborted)
+   */
   errorCode?: string;
+}
+
+// Pi gives the server 60 s to approve; a payment with no result 90 s after it started never will
+export const PAYMENT_RESULT_LIMIT_MS = 90_000;
+export const PAYMENT_TIMED_OUT_MESSAGE =
+  'The payment timed out. No Pi was taken. Please try again.';
+
+type PaymentIdHook = { onPaymentId: (paymentId: string) => void };
+
+// The flow's first result, or the time limit's, or the caller's abort, whichever comes first. Pi
+// keeps calling back after a result (it retries onReadyForServerApproval about every 10 s for its
+// 60 s window, also after we've refused), so the caller's hooks only run until then. The payment
+// callbacks stay live: a completion that arrives later is still sent to complete-payment and credits
+async function firstResult(
+  run: (hooks: PaymentIdHook) => Promise<PaymentResult>,
+  hooks?: { onPaymentId?: (paymentId: string) => void; signal?: AbortSignal },
+): Promise<PaymentResult> {
+  let settled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const signal = hooks?.signal;
+  const limit = new Promise<PaymentResult>((resolve) => {
+    timer = setTimeout(() => {
+      resolve({
+        success: false,
+        message: PAYMENT_TIMED_OUT_MESSAGE,
+        errorCode: 'timed_out',
+      });
+    }, PAYMENT_RESULT_LIMIT_MS);
+    onAbort = () => {
+      resolve({
+        success: false,
+        message: 'Stopped waiting for the payment',
+        errorCode: 'stopped_waiting',
+      });
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  const guarded: PaymentIdHook = {
+    onPaymentId: (paymentId) => {
+      if (!settled) hooks?.onPaymentId?.(paymentId);
+    },
+  };
+  try {
+    return await Promise.race([run(guarded), limit]);
+  } finally {
+    settled = true;
+    clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener('abort', onAbort);
+  }
 }
 
 /**
@@ -96,7 +150,28 @@ export async function executeSubscriptionPayment(
   }
   
   paymentInProgress = true;
-  
+
+  try {
+    // Awaited, so the lock is held until the payment has a result (at most PAYMENT_RESULT_LIMIT_MS)
+    return await firstResult(
+      (guarded) =>
+        runSubscriptionPayment(amountPi, tier, frequency, {
+          ...hooks,
+          ...guarded,
+        }),
+      hooks,
+    );
+  } finally {
+    paymentInProgress = false;
+  }
+}
+
+async function runSubscriptionPayment(
+  amountPi: number,
+  tier: string,
+  frequency: 'monthly' | 'yearly',
+  hooks: PaymentIdHook & { planName?: string },
+): Promise<PaymentResult> {
   try {
     // Ensure SDK is ready
     await initPiForPayments();
@@ -268,8 +343,6 @@ export async function executeSubscriptionPayment(
       success: false,
       message: error.message || 'Payment failed'
     };
-  } finally {
-    paymentInProgress = false;
   }
 }
 
@@ -308,10 +381,13 @@ export { setIncompletePaymentHandler };
  * Uses its own lock: a wallet top-up and a subscription purchase are separate
  * flows and shouldn't block each other, but two concurrent top-ups should not
  * be possible.
+ *
+ * Always settles: with the payment's result, a timeout after PAYMENT_RESULT_LIMIT_MS, or
+ * stopped_waiting when `signal` aborts. The lock is released on every one of those.
  */
 export async function executeWalletTopUp(
   amountPi: number,
-  hooks?: { onPaymentId?: (paymentId: string) => void }
+  hooks?: { onPaymentId?: (paymentId: string) => void; signal?: AbortSignal },
 ): Promise<PaymentResult> {
   if (walletTopUpInProgress) {
     return {
@@ -322,6 +398,20 @@ export async function executeWalletTopUp(
 
   walletTopUpInProgress = true;
 
+  try {
+    return await firstResult(
+      (guarded) => runWalletTopUp(amountPi, guarded),
+      hooks,
+    );
+  } finally {
+    walletTopUpInProgress = false;
+  }
+}
+
+async function runWalletTopUp(
+  amountPi: number,
+  hooks: PaymentIdHook,
+): Promise<PaymentResult> {
   try {
     await initPiForPayments();
 
@@ -375,7 +465,6 @@ export async function executeWalletTopUp(
     };
     lcEmit('info', `${FN_LC}.lifecycle.start`, 'validation');
 
-    // Awaited, so the lock is held until the payment finishes (not just until it starts)
     return await new Promise<PaymentResult>((resolve) => {
       const callbacks: PaymentCallbacks = {
         onReadyForServerApproval: async (paymentId: string) => {
@@ -492,7 +581,5 @@ export async function executeWalletTopUp(
       success: false,
       message: error instanceof Error ? error.message : 'Payment failed'
     };
-  } finally {
-    walletTopUpInProgress = false;
   }
 }

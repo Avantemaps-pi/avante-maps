@@ -85,10 +85,22 @@ function deriveStatus(status: PaymentStatusJson | null): { label: string; bad: b
     return { label: "Paid · didn't match the price", bad: true, ...settled, needsSupport: true };
   }
   if (status?.completed) return { label: 'Completed', bad: false, ...settled };
-  if (status?.cancelled) {
-    return { label: status.error === 'amount_mismatch' ? 'Cancelled · price changed' : 'Cancelled', bad: true, ...settled, cancelled: true };
+  // Cancelled, voided or expired: no Pi moved, so it's muted rather than an error
+  if (
+    status?.cancelled ||
+    status?.voided ||
+    /expired/i.test(status?.error ?? '')
+  ) {
+    return {
+      label:
+        status?.error === 'amount_mismatch'
+          ? 'Cancelled · price changed'
+          : 'Cancelled',
+      bad: false,
+      ...settled,
+      cancelled: true,
+    };
   }
-  if (status?.voided) return failed('Voided');
   if (status?.error) return failed('Error');
   return { label: 'Pending', bad: false, ...settled };
 }

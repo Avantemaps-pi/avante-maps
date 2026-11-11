@@ -106,6 +106,20 @@ Known policy behavior as of this writing:
 
 ---
 
+## Pi payments
+
+Full reference: `claude/pi-payments-reference.md` in the claude.ai project. Durable facts:
+
+- **Two Pi apps.** Testnet (testnet.avantemaps.com, server key `PI_API_KEY`) and Mainnet (server key `PI_MAINNET_API_KEY`). Each app sees only its own payments. Which app a payment belongs to depends on how Avante Maps was opened, so to test testnet payments, type testnet.avantemaps.com into the Pi Browser. As of 11 Nov 2026 the payment functions read only `PI_API_KEY`.
+- **Pi uids are per app.** Never compare `users.pi_uid` with a payment's `user_uid`. The payer check calls Pi's `/v2/me` with the client's in-memory `piAccessToken` (from this page load's `Pi.authenticate()`), and checks the uid and the signed-in user's username (#173).
+- **SDK:** `sandbox: false` inside the Pi Browser. `init()` and the payments scope belong to one `window.Pi` instance. Never trust them from localStorage or an earlier page load (#168, #169).
+- **Pi retries `onReadyForServerApproval` about every 10 s for its 60 s window**, also after we refuse. Client payment flows settle once and ignore later callbacks in the UI (#174).
+- **approve-payment, complete-payment and payment-status run with verify_jwt off.** They aren't in `supabase/config.toml`, so deploy them with `--no-verify-jwt`. CORS (`_shared/cors.ts`) must allow `x-lifecycle-id` and `x-correlation-id`.
+- **`/validation-key.txt` is served per host** from `src/config/piValidationKeys.ts` (no static file in `public/`).
+- **When a payment fails, read approve-payment's logs first:** `piErrorBody`, `payment_user_mismatch`, `pi_token_*`.
+
+---
+
 ## Environment & Branch Workflow
 
 - **`Dev` is the source of truth branch** on both Lovable and GitHub (`Avantemaps-pi/avantemaps`, branch `Dev`).
