@@ -55,6 +55,13 @@
   color: hsl(var(--background));
 }
 
+/* The home location picker's small map fills its own box, not the screen (the rule above is for
+   the full-screen map) */
+[data-home-picker] .leaflet-container {
+  height: 100% !important;
+  inset: 0;
+}
+
 /* OpenStreetMap attribution pill, kept clear of the bottom nav on mobile */
 .leaflet-container .leaflet-bottom .leaflet-control-attribution {
   margin: 0 0 16px 16px;

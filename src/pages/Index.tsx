@@ -19,6 +19,8 @@ import { useSearchTracking } from '@/hooks/useSearchTracking';
 import { useAuth } from '@/context/auth/useAuth';
 import LandingPage from './LandingPage';
 import { useIpLocationFocus } from '@/hooks/useIpLocationFocus';
+import { useHomeLocation } from '@/hooks/useHomeLocation';
+import HomeLocationSheet from '@/components/map/HomeLocationSheet';
 import '../styles/map.css';
 import { getOrigin } from '@/utils/browserEnv';
 import { Place } from '@/types/business';
@@ -98,8 +100,52 @@ const Index = () => {
   const { setOpenMobile } = useSidebar();
   const { trackBusinessSearch } = useSearchTracking();
 
-  // After login, focus the map on the user's approximate IP location (cached, once per session)
-  useIpLocationFocus(isAuthenticated && !authLoading);
+  // After login, focus the map once per session: GPS (when allowed), else the home location, else
+  // the IP location. Waits for the home location to load
+  const {
+    home,
+    isLoading: homeLoading,
+    isError: homeError,
+    saveHomeLocation,
+    isSaving: homeSaving,
+  } = useHomeLocation();
+  const homeReady = isAuthenticated && !authLoading && !homeLoading;
+  useIpLocationFocus(homeReady, home?.position ?? null);
+
+  // "Set your home location", once per account: shown while home_set_at is null (never when it
+  // couldn't be read). Dismissed without a choice, it waits for the next session
+  const [homeSheetOpen, setHomeSheetOpen] = useState(false);
+  const needsHome =
+    homeReady && !homeError && home !== null && home.setAt === null;
+  useEffect(() => {
+    if (!needsHome) return;
+    try {
+      if (sessionStorage.getItem('home_sheet_dismissed') === '1') return;
+    } catch {
+      // storage unavailable
+    }
+    setHomeSheetOpen(true);
+  }, [needsHome]);
+  const handleHomeSheetChange = (open: boolean) => {
+    setHomeSheetOpen(open);
+    if (!open) {
+      try {
+        sessionStorage.setItem('home_sheet_dismissed', '1');
+      } catch {
+        // ignore
+      }
+    }
+  };
+  const handleHomeSave = async (
+    position: { lat: number; lng: number } | null,
+  ) => {
+    await saveHomeLocation(position);
+    if (position) {
+      window.dispatchEvent(
+        new CustomEvent('centerMap', { detail: { ...position, zoom: 14 } }),
+      );
+    }
+  };
 
   const handlePlaceClick = (placeId: string, zoomToLocation?: boolean) => {
     setSelectedPlace(placeId);
@@ -574,6 +620,14 @@ const Index = () => {
         />
       )}
       <BottomNavBar onItemClick={(to) => to === '/' && closeList()} />
+      <HomeLocationSheet
+        open={homeSheetOpen}
+        onOpenChange={handleHomeSheetChange}
+        variant="first"
+        home={home}
+        onSave={handleHomeSave}
+        isSaving={homeSaving}
+      />
     </div>
   );
 };
