@@ -11,8 +11,10 @@ Deno.env.set('PI_API_KEY', 'test-pi-key');
 const handler = await loadHandler(new URL('./index.ts', import.meta.url).href);
 
 const OWNER = '00000000-0000-0000-0000-0000000000a1';
-// The owner's Pi account (users.pi_uid), which Pi reports as the payment's user_uid
+// The owner's uid in this Pi app: what Pi reports as the payment's user_uid and from /me
 const OWNER_PI_UID = 'pi-uid-owner-0001';
+const OWNER_USERNAME = 'JordynDaniel';
+const PI_TOKEN = 'pi-access-token-0001';
 const PAYMENT_ID = 'pay_1';
 
 // supabase-js starts auth refresh timers for each client the function creates, which Deno's
@@ -34,18 +36,33 @@ function setup(
     piUserUid?: string | null;
     /** users.pi_uid for the signed-in user (default: the owner's Pi account) */
     ownerPiUid?: string | null;
+    /** users.username for the signed-in user */
+    ownerUsername?: string | null;
+    /** What Pi's /me answers (default: the owner, in this app) */
+    me?: { uid?: string; username?: string };
+    meStatus?: number;
   } = {},
 ) {
   const piCalls: string[] = [];
+  const meAuth: (string | null)[] = [];
   const fake = installFakeSupabase({
     tables: {
       pi_price: options.priceUsd === null ? [] : [{ id: 1, price_usd: options.priceUsd ?? 0.0767 }],
       payments: options.rows ?? [],
-      users: [{ id: OWNER, pi_uid: options.ownerPiUid === undefined ? OWNER_PI_UID : options.ownerPiUid }],
+      users: [{
+        id: OWNER,
+        pi_uid: options.ownerPiUid === undefined ? OWNER_PI_UID : options.ownerPiUid,
+        username: options.ownerUsername === undefined ? OWNER_USERNAME : options.ownerUsername,
+      }],
     },
     users: { 'owner-token': OWNER },
     external: (url, init) => {
       if (url.host !== 'api.minepi.com') return undefined;
+      if (url.pathname === '/v2/me') {
+        meAuth.push(new Headers(init?.headers).get('authorization'));
+        if (options.meStatus) return new Response('nope', { status: options.meStatus });
+        return Response.json(options.me ?? { uid: OWNER_PI_UID, username: OWNER_USERNAME });
+      }
       assertEquals(new Headers(init?.headers).get('authorization'), 'Key test-pi-key');
       const action = url.pathname.split('/').pop();
       piCalls.push(action === PAYMENT_ID ? 'get' : action!);
@@ -62,15 +79,15 @@ function setup(
       return Response.json({ identifier: PAYMENT_ID });
     },
   });
-  return { fake, piCalls, row: () => fake.tables['payments']!.find((r) => r['payment_id'] === PAYMENT_ID) };
+  return { fake, piCalls, meAuth, row: () => fake.tables['payments']!.find((r) => r['payment_id'] === PAYMENT_ID) };
 }
 
-const call = async (metadata: Record<string, unknown>, amount = 65.19) => {
+const call = async (metadata: Record<string, unknown>, amount = 65.19, piAccessToken: string | undefined = PI_TOKEN) => {
   const res = await handler(
     new Request('http://fn/approve-payment', {
       method: 'POST',
       headers: { Authorization: 'Bearer owner-token', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paymentId: PAYMENT_ID, userId: OWNER, amount, memo: 'Small Business plan (monthly)', metadata }),
+      body: JSON.stringify({ paymentId: PAYMENT_ID, userId: OWNER, amount, memo: 'Small Business plan (monthly)', metadata, piAccessToken }),
     }),
   );
   return { status: res.status, json: await res.json() };
@@ -216,13 +233,94 @@ for (const [kind, metadata, amount] of [['top up', TOPUP, 3], ['message fee', FE
   });
 }
 
-test('the signed-in user has no pi_uid: refused the same way', async () => {
-  const { fake, piCalls, row } = setup({ piAmount: 3, ownerPiUid: null });
+// The owner's case: signed in through the Mainnet app, paying in the Testnet app
+test("users.pi_uid is another app's uid, and /me matches the payment: approved", async () => {
+  const { fake, piCalls, meAuth } = setup({ piAmount: 3, ownerPiUid: 'pi-uid-from-the-other-app' });
+  const { status, json } = await call(TOPUP, 3);
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(piCalls, ['get', 'approve']);
+  assertEquals(meAuth, [`Bearer ${PI_TOKEN}`]); // The user's token, never the API key
+  fake.restore();
+});
+
+test('the signed-in user has no pi_uid: not needed any more, approved', async () => {
+  const { fake } = setup({ piAmount: 3, ownerPiUid: null });
+  assertEquals((await call(TOPUP, 3)).status, 200);
+  fake.restore();
+});
+
+test('the username matches in a different case: approved', async () => {
+  const { fake, piCalls } = setup({ piAmount: 3, me: { uid: OWNER_PI_UID, username: 'JORDYNdaniel' } });
+  assertEquals((await call(TOPUP, 3)).status, 200);
+  assertEquals(piCalls, ['get', 'approve']);
+  fake.restore();
+});
+
+test("the token holder isn't the payer in this app: cancelled at Pi, 403, row marked", async () => {
+  const { fake, piCalls, row } = setup({ piAmount: 3, me: { uid: 'pi-uid-someone-else', username: OWNER_USERNAME } });
+  const { status, json } = await call(TOPUP, 3);
+  assertEquals([status, json.error_code, json.message], [403, 'payment_user_mismatch', MISMATCH_MESSAGE]);
+  assertEquals(piCalls, ['get', 'cancel']);
+  assertEquals((row()!['status'] as Row)['error'], 'payment_user_mismatch');
+  fake.restore();
+});
+
+test("the payer's username isn't this account's: cancelled at Pi, 403, row marked", async () => {
+  const { fake, piCalls, row } = setup({ piAmount: 3, me: { uid: OWNER_PI_UID, username: 'SomeoneElse' } });
   const { status, json } = await call(TOPUP, 3);
   assertEquals([status, json.error_code], [403, 'payment_user_mismatch']);
   assertEquals(piCalls, ['get', 'cancel']);
   assertEquals((row()!['status'] as Row)['error'], 'payment_user_mismatch');
   fake.restore();
+});
+
+test('the signed-in user has no username: refused the same way', async () => {
+  const { fake, piCalls } = setup({ piAmount: 3, ownerUsername: null });
+  assertEquals((await call(TOPUP, 3)).status, 403);
+  assertEquals(piCalls, ['get', 'cancel']);
+  fake.restore();
+});
+
+const TOKEN_INVALID_MESSAGE = 'Your Pi sign-in has expired. Close and reopen Avante Maps, then try again.';
+const PENDING = { approved: false, verified: false, completed: false, cancelled: false };
+
+for (const [name, options] of [
+  ['/me says 401', { meStatus: 401 }],
+  ['/me is down', { meStatus: 503 }],
+  ["/me doesn't say who", { me: { uid: OWNER_PI_UID } }],
+] as const) {
+  test(`${name}: 401 pi_token_invalid, not cancelled, left pending for a retry`, async () => {
+    const { fake, piCalls, row } = setup({ piAmount: 3, ...options });
+    const { status, json } = await call(TOPUP, 3);
+    assertEquals([status, json.error_code, json.message], [401, 'pi_token_invalid', TOKEN_INVALID_MESSAGE]);
+    assertEquals(piCalls, ['get']);
+    assertEquals(row()!['status'], PENDING);
+    fake.restore();
+  });
+}
+
+test('no piAccessToken (an old client): 400 pi_token_missing, before the row, Pi not called', async () => {
+  const { fake, piCalls, meAuth, row } = setup({ piAmount: 3 });
+  const res = await handler(
+    new Request('http://fn/approve-payment', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer owner-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paymentId: PAYMENT_ID, userId: OWNER, amount: 3, memo: 'Top up', metadata: TOPUP }),
+    }),
+  );
+  const json = await res.json();
+  assertEquals([res.status, json.error_code, json.message], [400, 'pi_token_missing', 'Please reopen Avante Maps and try again.']);
+  assertEquals([piCalls, meAuth, row()], [[], [], undefined]);
+  fake.restore();
+});
+
+test('a piAccessToken of the wrong size: 400, Pi not called', async () => {
+  for (const token of ['short', 'x'.repeat(2001)]) {
+    const { fake, piCalls, row } = setup({ piAmount: 3 });
+    assertEquals((await call(TOPUP, 3, token)).status, 400);
+    assertEquals([piCalls, row()], [[], undefined]);
+    fake.restore();
+  }
 });
 
 test("Pi doesn't say who paid: refused the same way", async () => {
@@ -267,7 +365,10 @@ test('logs never hold a whole Pi uid', async () => {
   const output = lines.join('\n');
   assert(!output.includes('pi-uid-someone-else'), output);
   assert(!output.includes(OWNER_PI_UID), output);
+  assert(!output.includes(OWNER_USERNAME), output);
+  assert(!output.includes(PI_TOKEN), output);
   assert(output.includes('pi-uid…'));
+  assert(output.includes('Jordyn…'));
 });
 
 // The app sends x-lifecycle-id and x-correlation-id (src/utils/correlation.ts); if the preflight

@@ -75,7 +75,8 @@ const FAKE_SDK = `
         state.scopes = scopes.slice();
         log.auths.push({ label: label, scopes: scopes.slice() });
         if (log.incomplete && typeof onIncompletePaymentFound === 'function') onIncompletePaymentFound(log.incomplete);
-        return Promise.resolve({ accessToken: 'pi-token', user: { uid: 'pi-uid-owner', username: 'SandboxUser' } });
+        // A new token each time, named after the object, so tests can tell which call sent it
+        return Promise.resolve({ accessToken: 'pi-token-' + label + '-' + log.auths.length, user: { uid: 'pi-uid-owner', username: 'SandboxUser' } });
       },
       nativeFeaturesList: function () {
         try { guard(); } catch (e) { return Promise.reject(e); }
@@ -152,6 +153,7 @@ interface Options {
 async function setup(page: Page, options: Options = {}) {
   const calls = {
     approve: 0,
+    approveBodies: [] as Record<string, unknown>[],
     complete: [] as Record<string, unknown>[],
     cleanup: 0,
   };
@@ -174,6 +176,9 @@ async function setup(page: Page, options: Options = {}) {
   );
   await page.route('**/functions/v1/approve-payment', (route) => {
     calls.approve += 1;
+    calls.approveBodies.push(
+      route.request().postDataJSON() as Record<string, unknown>,
+    );
     return route.fulfill({
       json: { success: true, message: 'Payment approved successfully' },
     });
@@ -292,6 +297,50 @@ test('the same SDK object is authenticated once for two payments; a replaced win
   ]);
 });
 
+// ---- The payer check: this visit's Pi access token goes with approve and complete
+
+test('a top up sends the access token from this SDK object to approve and complete', async ({
+  page,
+}) => {
+  const calls = await setup(page, { cachedPiAuth: true });
+  await openWallet(page);
+  await topUp(page);
+  await expect(page.getByText(SUCCESS)).toBeVisible();
+  // Not the token cached by an earlier load ('old-token')
+  expect(calls.approveBodies.map((b) => b.piAccessToken)).toEqual([
+    'pi-token-sdk-1-1',
+  ]);
+  expect(calls.complete.map((b) => b.piAccessToken)).toEqual([
+    'pi-token-sdk-1-1',
+  ]);
+});
+
+test('a replaced window.Pi is authenticated again and its new token is sent', async ({
+  page,
+}) => {
+  const calls = await setup(page);
+  await openWallet(page);
+  await topUp(page);
+  await expect(page.getByText(SUCCESS)).toBeVisible();
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      Pi: unknown;
+      __makeFakePi: (l: string) => unknown;
+    };
+    w.Pi = w.__makeFakePi('replacement');
+  });
+  await topUp(page, '2');
+  await expect.poll(() => calls.complete.length).toBe(2);
+  expect(calls.approveBodies.map((b) => b.piAccessToken)).toEqual([
+    'pi-token-sdk-1-1',
+    'pi-token-replacement-2',
+  ]);
+  expect(calls.complete.map((b) => b.piAccessToken)).toEqual([
+    'pi-token-sdk-1-1',
+    'pi-token-replacement-2',
+  ]);
+});
+
 test('a "scope" error before the approval: authenticated with payments and started once more', async ({
   page,
 }) => {
@@ -381,7 +430,10 @@ test('an unfinished payment with a transaction is completed with its details, an
     memo: 'Wallet top-up (3 Pi)',
     metadata: { kind: 'wallet_topup' },
     txid: 'txabcdef1234567890',
+    // From the authenticate that reported it (the handler waited for it, and didn't start another)
+    piAccessToken: 'pi-token-sdk-1-1',
   });
+  expect((await fakePi(page)).auths).toHaveLength(1);
   await expect(
     page.getByText('Your earlier Pi payment is complete.'),
   ).toBeVisible();

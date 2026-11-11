@@ -326,8 +326,9 @@ test('Continue in Pi Wallet charges the π shown in the sheet, not the USD price
   expect(payment.amount).toBe(65.19);
   expect(payment.memo).toBe('Small Business plan (monthly)');
   await expect.poll(() => completeCalls.length).toBe(1);
-  expect(approveCalls[0]).toMatchObject({ amount: 65.19 });
-  expect(completeCalls[0]).toMatchObject({ amount: 65.19 });
+  // With the access token from this visit's Pi.authenticate, for the server's payer check
+  expect(approveCalls[0]).toMatchObject({ amount: 65.19, piAccessToken: 'pi' });
+  expect(completeCalls[0]).toMatchObject({ amount: 65.19, piAccessToken: 'pi' });
   await expect(page.getByText(/Successfully subscribed/)).toBeVisible();
 });
 

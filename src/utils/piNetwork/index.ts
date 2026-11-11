@@ -11,6 +11,8 @@ export {
   getNativeFeaturesList,
   isPiInstanceInitialized,
   ensurePiPaymentsAuth,
+  getPiAccessToken,
+  getPiAccessTokenForPayment,
   hasPaymentsAuth,
   getInstanceScopes,
   PAYMENT_SCOPES,

@@ -29,7 +29,9 @@ const PaymentRequestSchema = z.object({
     conversationId: z.string().uuid().optional(),
     businessId: z.number().int().positive().optional(),
     feePi: z.number().positive().max(100).optional(),
-  }).strict()
+  }).strict(),
+  // Optional here so a missing one gets pi_token_missing, not a generic validation error
+  piAccessToken: z.string().min(10).max(2000).optional(),
 });
 
 const PAYMENT_USER_MISMATCH = {
@@ -38,7 +40,19 @@ const PAYMENT_USER_MISMATCH = {
   message: "This payment was started from a different Pi account. Sign in with the account you're paying from.",
 };
 
-// Pi uids in logs: enough to tell them apart, never the whole value
+const PI_TOKEN_MISSING = {
+  success: false,
+  error_code: 'pi_token_missing',
+  message: 'Please reopen Avante Maps and try again.',
+};
+
+const PI_TOKEN_INVALID = {
+  success: false,
+  error_code: 'pi_token_invalid',
+  message: 'Your Pi sign-in has expired. Close and reopen Avante Maps, then try again.',
+};
+
+// Pi uids and usernames in logs: enough to tell them apart, never the whole value
 const shortUid = (uid: unknown) => (typeof uid === 'string' && uid ? `${uid.slice(0, 6)}…` : null);
 
 // Subscription tier assignment is intentionally NOT performed here.
@@ -119,6 +133,13 @@ Deno.serve(async (req) => {
 
     log.extend({ paymentId: paymentRequest.paymentId, userId: paymentRequest.userId });
     log.info(`${FN}.validation.ok`, { stage: 'validation', amount: paymentRequest.amount });
+
+    // An old client still open. Nothing has been written yet
+    const piAccessToken = paymentRequest.piAccessToken;
+    if (!piAccessToken) {
+      log.warn(`${FN}.validation.pi_token_missing`, { stage: 'validation' });
+      return respond({ ...PI_TOKEN_MISSING, paymentId: paymentRequest.paymentId }, 400);
+    }
 
     const piApiKey = Deno.env.get('PI_API_KEY');
     if (!piApiKey) {
@@ -341,22 +362,58 @@ Deno.serve(async (req) => {
       return respond({ success: false, message: 'Unable to verify payment' }, 502);
     }
 
-    // The Pi account paying must be the signed-in user's
+    // Who holds this visit's token, in this app. Pi uids are per app and one project serves both
+    // apps, so users.pi_uid can't be compared with the payment's. Left pending if Pi won't say
+    let piMe: { uid: string; username: string } | null = null;
+    try {
+      const meResp = await fetch('https://api.minepi.com/v2/me', {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${piAccessToken}` },
+      });
+      if (meResp.ok) {
+        const me = await meResp.json();
+        // Without both we can't say who this is, which isn't the same as a different account
+        if (typeof me?.uid === 'string' && me.uid && typeof me?.username === 'string' && me.username) {
+          piMe = { uid: me.uid, username: me.username };
+        }
+        if (!piMe) log.warn(`${FN}.pi_api.me_incomplete`, { stage: 'pi_api' });
+      } else {
+        log.warn(`${FN}.pi_api.me_failed`, { stage: 'pi_api', status: meResp.status });
+      }
+    } catch (meErr) {
+      log.warn(`${FN}.pi_api.me_exception`, {
+        stage: 'pi_api',
+        message: meErr instanceof Error ? meErr.message : String(meErr),
+      });
+    }
+    if (!piMe) {
+      return respond({ ...PI_TOKEN_INVALID, paymentId: paymentRequest.paymentId }, 401);
+    }
+
+    // The token holder must be the payer in this app, and the payer this account (a Pi username is
+    // the same in every app)
     const { data: payer, error: payerError } = await supabaseClient
       .from('users')
-      .select('pi_uid')
+      .select('username')
       .eq('id', paymentRequest.userId)
       .maybeSingle();
     if (payerError) {
       log.error(`${FN}.verify.user_lookup_error`, { stage: 'lookup', code: payerError.code });
       return respond({ success: false, message: 'Payment processing failed. Please try again.' }, 500);
     }
-    const signedInPiUid = payer?.pi_uid ?? null;
-    if (!signedInPiUid || !piUserUid || signedInPiUid !== piUserUid) {
+    const signedInUsername = payer?.username ?? null;
+    if (
+      !piUserUid ||
+      piMe.uid !== piUserUid ||
+      !signedInUsername ||
+      piMe.username.toLowerCase() !== signedInUsername.toLowerCase()
+    ) {
       log.error(`${FN}.verify.payment_user_mismatch`, {
         stage: 'validation',
         piUserUid: shortUid(piUserUid),
-        signedInPiUid: shortUid(signedInPiUid),
+        piMeUid: shortUid(piMe.uid),
+        piMeUsername: shortUid(piMe.username),
+        signedInUsername: shortUid(signedInUsername),
       });
       await cancelAtPi('payment_user_mismatch');
       return respond({ ...PAYMENT_USER_MISMATCH, paymentId: paymentRequest.paymentId }, 403);

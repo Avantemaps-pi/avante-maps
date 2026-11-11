@@ -7,6 +7,7 @@
 import {
   initializePiNetwork,
   ensurePiPaymentsAuth,
+  getPiAccessToken,
   createPiPayment,
   getPiAuthResult,
   setIncompletePaymentHandler,
@@ -163,7 +164,7 @@ export async function executeSubscriptionPayment(
           try {
             hooks?.onPaymentId?.(paymentId);
             const approvalResult = await approvePayment(
-              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata },
+              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, piAccessToken: getPiAccessToken() },
               { lifecycleId }
             );
             lcEmit('info', `${FN_LC}.approve.result`, 'pi_api', {
@@ -194,7 +195,7 @@ export async function executeSubscriptionPayment(
           lcEmit('info', `${FN_LC}.complete.start`, 'pi_api', { paymentId, txid });
           try {
             const completionResult = await completePayment(
-              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, txid },
+              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, txid, piAccessToken: getPiAccessToken() },
               { lifecycleId }
             );
             lcEmit('info', `${FN_LC}.complete.result`, 'pi_api', {
@@ -382,7 +383,7 @@ export async function executeWalletTopUp(
           try {
             hooks?.onPaymentId?.(paymentId);
             const approvalResult = await approvePayment(
-              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata },
+              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, piAccessToken: getPiAccessToken() },
               { lifecycleId }
             );
             lcEmit('info', `${FN_LC}.approve.result`, 'pi_api', {
@@ -414,7 +415,7 @@ export async function executeWalletTopUp(
           lcEmit('info', `${FN_LC}.complete.start`, 'pi_api', { paymentId, txid });
           try {
             const completionResult = await completePayment(
-              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, txid },
+              { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, txid, piAccessToken: getPiAccessToken() },
               { lifecycleId }
             );
             lcEmit('info', `${FN_LC}.complete.result`, 'pi_api', {
