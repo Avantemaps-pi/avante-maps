@@ -51,13 +51,15 @@ const session = {
 // window.__fakePi records inits, authenticates (which object, which scopes) and payments.
 // __makeFakePi(label) makes a new, uninitialised, unauthenticated SDK object.
 // log.incomplete: a payment authenticate reports as unfinished. log.scopeErrorAfterApproval: the
-// payment fails with the scope error after its approval callback
+// payment fails with the scope error after its approval callback. log.mode 'silent': Pi never calls
+// back (as after "Payment Expired"); 'manual': the callbacks wait in log.callbacks for the test
 const FAKE_SDK = `
 (function () {
   var NOT_INIT = ${JSON.stringify(NOT_INITIALIZED)};
   var NO_SCOPE = ${JSON.stringify(NO_SCOPE)};
   var log = (window.__fakePi = window.__fakePi || {
-    inits: [], auths: [], payments: [], made: 0, incomplete: null, scopeErrorAfterApproval: false
+    inits: [], auths: [], payments: [], made: 0, incomplete: null, scopeErrorAfterApproval: false,
+    mode: 'auto', callbacks: null
   });
   function makePi(label) {
     var state = { initialized: false, scopes: [] };
@@ -87,6 +89,8 @@ const FAKE_SDK = `
         if (state.scopes.indexOf('payments') === -1) throw new Error(NO_SCOPE);
         var id = 'pay_' + (log.payments.length + 1);
         log.payments.push({ label: label, amount: data.amount, id: id });
+        if (log.mode === 'silent') return;
+        if (log.mode === 'manual') { log.callbacks = callbacks; return; }
         setTimeout(function () {
           callbacks.onReadyForServerApproval(id);
           setTimeout(function () {
@@ -146,6 +150,7 @@ const INCOMPLETE_NO_TX = {
 interface Options {
   /** A Pi sign-in cached in localStorage by an earlier page load */
   cachedPiAuth?: boolean;
+  approve?: { status: number; body: object };
   complete?: { status: number; body: object };
   cleanup?: { cleanedCount: number };
 }
@@ -156,6 +161,7 @@ async function setup(page: Page, options: Options = {}) {
     approveBodies: [] as Record<string, unknown>[],
     complete: [] as Record<string, unknown>[],
     cleanup: 0,
+    balance: 0,
   };
   await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
   await page.route('**/auth/v1/**', (route) =>
@@ -166,9 +172,10 @@ async function setup(page: Page, options: Options = {}) {
   await page.route('**/pi-sdk.js', (route) =>
     route.fulfill({ contentType: 'application/javascript', body: FAKE_SDK }),
   );
-  await page.route('**/rest/v1/rpc/get_wallet_balance*', (route) =>
-    route.fulfill({ json: 23.5 }),
-  );
+  await page.route('**/rest/v1/rpc/get_wallet_balance*', (route) => {
+    calls.balance += 1;
+    return route.fulfill({ json: 23.5 });
+  });
   await page.route('**/rest/v1/pi_price*', (route) =>
     route.fulfill({
       json: { price_usd: 0.5, updated_at: '2026-11-04T00:00:00Z' },
@@ -179,9 +186,11 @@ async function setup(page: Page, options: Options = {}) {
     calls.approveBodies.push(
       route.request().postDataJSON() as Record<string, unknown>,
     );
-    return route.fulfill({
-      json: { success: true, message: 'Payment approved successfully' },
-    });
+    const answer = options.approve ?? {
+      status: 200,
+      body: { success: true, message: 'Payment approved successfully' },
+    };
+    return route.fulfill({ status: answer.status, json: answer.body });
   });
   await page.route('**/functions/v1/complete-payment', (route) => {
     calls.complete.push(
@@ -517,4 +526,131 @@ test("the unfinished-payment handler's logs never hold a whole txid", async ({
   expect(output).toContain('pay_earlier');
   expect(output).toContain('txabcd…');
   expect(output).not.toContain('txabcdef1234567890');
+});
+
+// ---- The Top up dialog always finishes (#174)
+
+const TIMED_OUT = 'The payment timed out. No Pi was taken. Please try again.';
+const topUpDialog = (page: Page) =>
+  page.getByRole('dialog', { name: 'Top up your wallet' });
+// Calls a callback Pi was given for the payment in 'manual' mode, as Pi would
+const piCallsBack = (page: Page, name: string, ...args: string[]) =>
+  page.evaluate(
+    ([n, a]) => {
+      const callbacks = (
+        window as unknown as {
+          __fakePi: { callbacks: Record<string, (...x: string[]) => unknown> };
+        }
+      ).__fakePi.callbacks;
+      void callbacks[n as string](...(a as string[]));
+    },
+    [name, args] as const,
+  );
+
+test('no callback from Pi after Confirm: after 90 s the timeout message, Confirm and Cancel work again, and another top up can start', async ({
+  page,
+}) => {
+  await page.clock.install();
+  await setup(page);
+  await openWallet(page);
+  await setFake(page, { mode: 'silent' });
+  await topUp(page);
+  const dialog = topUpDialog(page);
+  await expect(
+    dialog.getByRole('button', { name: /Processing/ }),
+  ).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+  await expect.poll(async () => (await fakePi(page)).payments.length).toBe(1);
+
+  await page.clock.fastForward('01:31');
+  await expect(page.getByText(TIMED_OUT)).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+
+  // The lock was released by the timeout
+  await dialog.getByRole('button', { name: 'Confirm' }).tap();
+  await expect.poll(async () => (await fakePi(page)).payments.length).toBe(2);
+  await expect(
+    page.getByText('A wallet top-up is already in progress'),
+  ).toHaveCount(0);
+});
+
+test('Cancel while processing closes the dialog, refetches the balance, and releases the lock', async ({
+  page,
+}) => {
+  const calls = await setup(page);
+  await openWallet(page);
+  await setFake(page, { mode: 'silent' });
+  await topUp(page);
+  await expect.poll(async () => (await fakePi(page)).payments.length).toBe(1);
+  const balanceReads = calls.balance;
+
+  await topUpDialog(page).getByRole('button', { name: 'Cancel' }).tap();
+  await expect(topUpDialog(page)).toBeHidden();
+  await expect.poll(() => calls.balance).toBeGreaterThan(balanceReads);
+  // Stopping the wait isn't an error
+  await expect(page.getByText(TIMED_OUT)).toHaveCount(0);
+  await expect(page.getByText('Stopped waiting for the payment')).toHaveCount(
+    0,
+  );
+
+  await topUp(page, '2');
+  await expect.poll(async () => (await fakePi(page)).payments.length).toBe(2);
+  await expect(
+    page.getByText('A wallet top-up is already in progress'),
+  ).toHaveCount(0);
+});
+
+test('a completion that arrives after Cancel is still sent to complete-payment, and the dialog shows nothing for it', async ({
+  page,
+}) => {
+  const calls = await setup(page);
+  await openWallet(page);
+  await setFake(page, { mode: 'manual' });
+  await topUp(page);
+  await expect.poll(async () => (await fakePi(page)).payments.length).toBe(1);
+  await piCallsBack(page, 'onReadyForServerApproval', 'pay_1');
+  await expect.poll(() => calls.approve).toBe(1);
+
+  await topUpDialog(page).getByRole('button', { name: 'Cancel' }).tap();
+  await expect(topUpDialog(page)).toBeHidden();
+
+  await piCallsBack(page, 'onReadyForServerCompletion', 'pay_1', 'tx_pay_1');
+  await expect.poll(() => calls.complete.length).toBe(1);
+  expect(calls.complete[0]).toMatchObject({
+    paymentId: 'pay_1',
+    txid: 'tx_pay_1',
+  });
+  await expect(page.getByText(SUCCESS)).toHaveCount(0);
+  await expect(topUpDialog(page)).toBeHidden();
+});
+
+// The cause on the phone (10 and 11 Nov): Pi asks for approval about every 10 s for 60 s. The first
+// refusal finished the top up, then each retry set the dialog back to Processing for good
+test('Pi asking for approval again after a refusal does not lock the dialog again', async ({
+  page,
+}) => {
+  const calls = await setup(page, {
+    approve: {
+      status: 502,
+      body: { success: false, message: 'Unable to verify payment' },
+    },
+  });
+  await openWallet(page);
+  await setFake(page, { mode: 'manual' });
+  await topUp(page);
+  await expect.poll(async () => (await fakePi(page)).payments.length).toBe(1);
+  await piCallsBack(page, 'onReadyForServerApproval', 'pay_1');
+  await expect(page.getByText('Unable to verify payment')).toBeVisible();
+  const dialog = topUpDialog(page);
+  await expect(dialog.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+
+  await piCallsBack(page, 'onReadyForServerApproval', 'pay_1');
+  await piCallsBack(page, 'onReadyForServerApproval', 'pay_1');
+  await expect.poll(() => calls.approve).toBe(3);
+  await expect(dialog.getByRole('button', { name: 'Confirm' })).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: /Processing/ })).toHaveCount(
+    0,
+  );
+  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeEnabled();
 });

@@ -48,10 +48,13 @@ interface Options {
   balance?: number | 'fails';
   signedOut?: boolean;
   clipboardFails?: boolean;
+  /** What payments returns once cleanup-stale-payments has been called */
+  paymentsAfterCleanup?: object[];
+  cleanupFails?: boolean;
 }
 
 async function setup(page: Page, options: Options = {}) {
-  const requests = { payments: [] as string[], ledger: [] as string[], businesses: [] as string[] };
+  const requests = { payments: [] as string[], ledger: [] as string[], businesses: [] as string[], cleanup: [] as Record<string, unknown>[] };
   const data = { businesses: options.businesses };
 
   await page.route(`${SUPABASE}/**`, (route) => route.fulfill({ json: [] }));
@@ -65,7 +68,15 @@ async function setup(page: Page, options: Options = {}) {
   );
   await page.route('**/rest/v1/payments*', (route) => {
     requests.payments.push(route.request().url());
-    return options.paymentsFail ? route.fulfill({ status: 500, json: { message: 'boom' } }) : route.fulfill({ json: options.payments ?? [] });
+    if (options.paymentsFail) return route.fulfill({ status: 500, json: { message: 'boom' } });
+    const rows = requests.cleanup.length && options.paymentsAfterCleanup ? options.paymentsAfterCleanup : options.payments;
+    return route.fulfill({ json: rows ?? [] });
+  });
+  await page.route('**/functions/v1/cleanup-stale-payments', (route) => {
+    requests.cleanup.push(route.request().postDataJSON() as Record<string, unknown>);
+    return options.cleanupFails
+      ? route.fulfill({ status: 500, json: { success: false, message: 'boom' } })
+      : route.fulfill({ json: { success: true, message: 'Cleaned up 1 stale payments', cleanedCount: 1 } });
   });
   await page.route('**/rest/v1/wallet_ledger*', (route) => {
     const url = new URL(route.request().url());
@@ -275,7 +286,7 @@ test('signed out: no wallets section, and nothing is read', async ({ page }) => 
   await expect(page.getByText('Sign in to view your payment history.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Your wallets' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Recent activity' })).toHaveCount(0);
-  expect(requests).toEqual({ payments: [], ledger: [], businesses: [] });
+  expect(requests).toEqual({ payments: [], ledger: [], businesses: [], cleanup: [] });
 });
 
 // ---- Recent activity
@@ -429,19 +440,155 @@ test('any cancelled payment has no sign, including a top up', async ({ page }) =
   await expect(activityRows(page).nth(1).getByText('8.00 π', { exact: true })).toBeVisible();
 });
 
-test('a failed payment that was not cancelled keeps its sign, in red', async ({ page }) => {
+test('an error that was not cancelled keeps its sign, in red', async ({
+  page,
+}) => {
   await setup(page, {
     payments: [
-      payment(1, '2026-11-02T09:00:00Z', 7, { subscriptionTier: 'organization' }, { approved: true, completed: false, cancelled: false, voided: true }),
-      payment(2, '2026-11-01T09:00:00Z', 8, { subscriptionTier: 'organization' }, { approved: true, completed: false, cancelled: false, error: 'boom' }),
+      payment(
+        2,
+        '2026-11-01T09:00:00Z',
+        8,
+        { subscriptionTier: 'organization' },
+        { approved: true, completed: false, cancelled: false, error: 'boom' },
+      ),
     ],
   });
   await page.goto('/wallet');
-  for (const [index, text, status] of [[0, '− 7.00 π', 'Voided'], [1, '− 8.00 π', 'Error']] as const) {
+  const row = activityRows(page).first();
+  const red = await row
+    .getByText('Error', { exact: true })
+    .evaluate((el) => getComputedStyle(el).color);
+  await expect(row.getByText('− 8.00 π')).toHaveCSS('color', red);
+});
+
+// No Pi moved for any of these, so none is an error or Pending (#174)
+test('cancelled, voided and expired payments read "Cancelled", muted, with no sign', async ({
+  page,
+}) => {
+  await setup(page, {
+    payments: [
+      payment(
+        1,
+        '2026-11-03T09:00:00Z',
+        1,
+        { kind: 'wallet_topup' },
+        {
+          ...CANCELLED,
+          error:
+            'Payment automatically cancelled due to staleness (>10 minutes old)',
+        },
+      ),
+      payment(
+        2,
+        '2026-11-02T09:00:00Z',
+        7,
+        { subscriptionTier: 'organization' },
+        { approved: true, completed: false, cancelled: false, voided: true },
+      ),
+      payment(
+        3,
+        '2026-11-01T09:00:00Z',
+        2,
+        { kind: 'wallet_topup' },
+        {
+          approved: false,
+          completed: false,
+          cancelled: false,
+          error: 'payment_expired',
+        },
+      ),
+    ],
+  });
+  await page.goto('/wallet');
+  for (const [index, meta, amount] of [
+    [0, '3 Nov', '1.00 π'],
+    [1, 'Plan · 2 Nov', '7.00 π'],
+    [2, '1 Nov', '2.00 π'],
+  ] as const) {
     const row = activityRows(page).nth(index);
-    const red = await row.getByText(status, { exact: true }).evaluate((el) => getComputedStyle(el).color);
-    await expect(row.getByText(text)).toHaveCSS('color', red);
+    await expect(row).toContainText(`${meta} · Cancelled`);
+    await expect(row).not.toContainText('Pending');
+    await expect(row).not.toContainText('Voided');
+    await expect(row).not.toContainText('−');
+    await expect(row).not.toContainText('+');
+    const muted = await row
+      .getByText(meta)
+      .evaluate((el) => getComputedStyle(el).color);
+    await expect(row.getByText('Cancelled', { exact: true })).toHaveCSS(
+      'color',
+      muted,
+    );
+    await expect(row.getByText(amount, { exact: true })).toHaveCSS(
+      'color',
+      muted,
+    );
   }
+});
+
+// ---- Abandoned payments are tidied when the Wallet opens (#174)
+
+test('opening Wallet calls cleanup once per session, with the session user, then refetches activity', async ({
+  page,
+}) => {
+  const pendingTopUp = payment(
+    1,
+    '2026-11-10T23:07:00Z',
+    1,
+    { kind: 'wallet_topup' },
+    { approved: false, verified: false, completed: false, cancelled: false },
+  );
+  const cancelledTopUp = {
+    ...pendingTopUp,
+    status: {
+      ...CANCELLED,
+      error:
+        'Payment automatically cancelled due to staleness (>10 minutes old)',
+    },
+  };
+  const { requests } = await setup(page, {
+    payments: [pendingTopUp],
+    paymentsAfterCleanup: [cancelledTopUp],
+  });
+  await page.goto('/wallet');
+  await expect.poll(() => requests.cleanup.length).toBe(1);
+  expect(requests.cleanup[0]).toEqual({ userId: mockUser.uid });
+  await expect(activityRows(page).first()).toContainText('10 Nov · Cancelled');
+  // Quietly: no toast
+  await expect(page.getByText(/stale payments/i)).toHaveCount(0);
+
+  // Away and back in the app: not again
+  await page.getByRole('link', { name: 'Saved' }).tap();
+  await expect(page).toHaveURL(/\/bookmarks/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/wallet/);
+  await expect(activityRows(page).first()).toContainText('Cancelled');
+  expect(requests.cleanup).toHaveLength(1);
+});
+
+test('a cleanup that fails shows nothing, and the page works as usual', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const { requests } = await setup(page, {
+    payments: [TOP_UP],
+    cleanupFails: true,
+  });
+  await page.goto('/wallet');
+  await expect.poll(() => requests.cleanup.length).toBe(1);
+  await expect(activityRows(page).first()).toContainText('1 Nov · Completed');
+  await expect(page.getByText(/cleanup|boom/i)).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('signed out: no cleanup', async ({ page }) => {
+  const { requests } = await setup(page, { signedOut: true });
+  await page.goto('/wallet');
+  await expect(
+    page.getByText('Sign in to view your payment history.'),
+  ).toBeVisible();
+  expect(requests.cleanup).toHaveLength(0);
 });
 
 test('plan_not_activated reads "Paid · plan not activated", with the Contact support line', async ({ page }) => {

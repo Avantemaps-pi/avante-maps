@@ -512,3 +512,23 @@ test('sizes and selected row: 44px Close, 64px rows, 2px primary border on the s
   const noSideways = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
   expect(noSideways).toBe(true);
 });
+
+// Pi's approval window is 60 s: with no callback at all, the plan payment ends after 90 s (#174)
+test('Pi never calls back: after 90 s the payment times out with the message, and the plan can be chosen again', async ({
+  page,
+}) => {
+  await page.clock.install();
+  await setup(page, { balance: 3.2 });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  await expect.poll(async () => (await piPayments(page)).length).toBe(1);
+  await expect(planButton(page)).toBeDisabled();
+
+  await page.clock.fastForward('01:31');
+  await expect(
+    page.getByText('The payment timed out. No Pi was taken. Please try again.'),
+  ).toBeVisible();
+  await expect(planButton(page)).toBeEnabled();
+});
