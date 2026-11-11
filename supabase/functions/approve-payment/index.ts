@@ -290,8 +290,78 @@ Deno.serve(async (req) => {
     // The app that has this payment, once Pi has returned it below
     let piClient: PiAppClient | null = null;
 
+    // Marks the row cancelled, but only while it isn't approved or completed: Pi retries approval
+    // and requests for one payment can overlap, so another one may have approved it meanwhile
+    // (11 Nov: a duplicate's error overwrote an approved row, and the payment couldn't complete).
+    // When nothing was changed, the answer comes from the row as it is. null: answer as cancelled
+    const markCancelled = async (
+      error: string,
+      transition: Record<string, unknown>,
+    ): Promise<Response | null> => {
+      const { data: changed, error: updateError } = await supabaseClient
+        .from('payments')
+        .update({
+          status: {
+            approved: false,
+            verified: false,
+            completed: false,
+            cancelled: true,
+            error,
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .eq('payment_id', paymentRequest.paymentId)
+        .eq('status->approved', false)
+        .eq('status->completed', false)
+        .select('payment_id');
+      if (updateError) {
+        log.error(`${FN}.db_write.cancel_error`, {
+          stage: 'db_write',
+          code: updateError.code,
+          message: updateError.message,
+        });
+        return null;
+      }
+      if (changed && changed.length > 0) {
+        log.transition('pending', 'cancelled', transition);
+        return null;
+      }
+      const { data: current } = await supabaseClient
+        .from('payments')
+        .select('status, txid')
+        .eq('payment_id', paymentRequest.paymentId)
+        .maybeSingle();
+      if (current?.status?.completed) {
+        log.info(`${FN}.terminal.idempotent`, {
+          stage: 'transition',
+          terminalReason: 'completed',
+          source: 'not_cancelled',
+        });
+        return respond({
+          success: true,
+          message: 'Payment already completed',
+          paymentId: paymentRequest.paymentId,
+          txid: current.txid,
+        });
+      }
+      if (current?.status?.approved) {
+        log.info(`${FN}.terminal.idempotent`, {
+          stage: 'transition',
+          terminalReason: null,
+          note: 'already_approved',
+          source: 'not_cancelled',
+        });
+        return respond({
+          success: true,
+          message: 'Payment was already approved',
+          paymentId: paymentRequest.paymentId,
+        });
+      }
+      return null;
+    };
+
     // Cancels the payment at Pi and marks the row, for a payment that mustn't be approved
-    const cancelAtPi = async (error: string) => {
+    const cancelAtPi = async (error: string): Promise<Response | null> => {
       try {
         const cancelResponse = piClient ? await piClient.cancel(paymentRequest.paymentId) : null;
         if (cancelResponse && !cancelResponse.ok) {
@@ -303,17 +373,7 @@ Deno.serve(async (req) => {
           message: cancelError instanceof Error ? cancelError.message : String(cancelError),
         });
       }
-      await supabaseClient.from('payments').update({
-        status: {
-          approved: false,
-          verified: false,
-          completed: false,
-          cancelled: true,
-          error,
-        },
-        updated_at: new Date().toISOString(),
-      }).eq('payment_id', paymentRequest.paymentId);
-      log.transition('pending', 'cancelled', { terminalReason: 'cancelled', source: error });
+      return await markCancelled(error, { terminalReason: 'cancelled', source: error });
     };
 
     // The payment as Pi has it, for every kind: who is paying, and (for a plan) the amount the user
@@ -411,7 +471,8 @@ Deno.serve(async (req) => {
         piMeUsername: shortUid(piMe.username),
         signedInUsername: shortUid(signedInUsername),
       });
-      await cancelAtPi('payment_user_mismatch');
+      const answer = await cancelAtPi('payment_user_mismatch');
+      if (answer) return answer;
       return respond({ ...PAYMENT_USER_MISMATCH, paymentId: paymentRequest.paymentId }, 403);
     }
 
@@ -423,7 +484,8 @@ Deno.serve(async (req) => {
 
       if (piAmount < expectedPlanPi * AMOUNT_TOLERANCE) {
         log.warn(`${FN}.verify.amount_mismatch`, { stage: 'validation', piAmount, expectedPi: expectedPlanPi });
-        await cancelAtPi('amount_mismatch');
+        const answer = await cancelAtPi('amount_mismatch');
+        if (answer) return answer;
         return respond({
           success: false,
           error_code: 'amount_mismatch',
@@ -469,19 +531,12 @@ Deno.serve(async (req) => {
           });
         }
 
-        await supabaseClient.from('payments').update({
-          status: {
-            approved: false,
-            verified: false,
-            completed: false,
-            cancelled: true,
-            error: `Pi Network API error: ${JSON.stringify(approveResult)}`,
-          },
-          updated_at: new Date().toISOString(),
-        }).eq('payment_id', paymentRequest.paymentId);
-
         log.error(`${FN}.pi_api.error`, { stage: 'pi_api', result: approveResult });
-        log.transition('pending', 'cancelled', { terminalReason: 'error', source: 'pi_api_error' });
+        const answer = await markCancelled(
+          `Pi Network API error: ${JSON.stringify(approveResult)}`,
+          { terminalReason: 'error', source: 'pi_api_error' },
+        );
+        if (answer) return answer;
         return respond({ success: false, message: 'Payment approval failed. Please try again.' }, 502);
       }
 
@@ -515,17 +570,11 @@ Deno.serve(async (req) => {
         stage: 'pi_api',
         message: apiError instanceof Error ? apiError.message : String(apiError),
       });
-      await supabaseClient.from('payments').update({
-        status: {
-          approved: false,
-          verified: false,
-          completed: false,
-          cancelled: true,
-          error: `API call error: ${apiError instanceof Error ? apiError.message : String(apiError)}`,
-        },
-        updated_at: new Date().toISOString(),
-      }).eq('payment_id', paymentRequest.paymentId);
-      log.transition('pending', 'cancelled', { terminalReason: 'error', source: 'pi_api_exception' });
+      const answer = await markCancelled(
+        `API call error: ${apiError instanceof Error ? apiError.message : String(apiError)}`,
+        { terminalReason: 'error', source: 'pi_api_exception' },
+      );
+      if (answer) return answer;
 
       return respond({ success: false, message: 'Payment service temporarily unavailable. Please try again.' }, 502);
     }
