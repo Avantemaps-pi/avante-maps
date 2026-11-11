@@ -15,6 +15,62 @@ const logCtx = () => ({
 });
 
 const TOAST_ID = 'locate-me';
+const DENIED_TOAST_ID = 'locate-me-denied';
+const DENIED_MESSAGE =
+  'Location is off for Avante Maps. Turn it on in your browser settings to use your exact location.';
+const APPROXIMATE_MESSAGE = 'Centred on your approximate location';
+
+type GpsResult =
+  | { ok: true; lat: number; lng: number; accuracy: number }
+  | { ok: false; denied: boolean };
+
+// One getCurrentPosition. Never rejects
+const getPosition = (options: PositionOptions) =>
+  new Promise<GpsResult>((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) =>
+        resolve({
+          ok: true,
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        }),
+      (err) => {
+        const codeName =
+          err.code === err.PERMISSION_DENIED
+            ? 'PERMISSION_DENIED'
+            : err.code === err.POSITION_UNAVAILABLE
+              ? 'POSITION_UNAVAILABLE'
+              : err.code === err.TIMEOUT
+                ? 'TIMEOUT'
+                : `UNKNOWN_${err.code}`;
+        secureLog.warn('LocateMe: geolocation failed', {
+          code: err.code,
+          codeName,
+          highAccuracy: !!options.enableHighAccuracy,
+          ...logCtx(),
+        });
+        resolve({ ok: false, denied: err.code === err.PERMISSION_DENIED });
+      },
+      options,
+    );
+  });
+
+// High accuracy first; on a timeout or no position, once more at low accuracy (indoors a phone
+// often has no GPS fix but does have a network position)
+const getDevicePosition = async (): Promise<GpsResult> => {
+  const precise = await getPosition({
+    enableHighAccuracy: true,
+    timeout: 15000,
+    maximumAge: 60000,
+  });
+  if (precise.ok || precise.denied) return precise;
+  return getPosition({
+    enableHighAccuracy: false,
+    timeout: 10000,
+    maximumAge: 60000,
+  });
+};
 
 const dispatchCenter = (lat: number, lng: number) => {
   window.dispatchEvent(new CustomEvent('centerMap', { detail: { lat, lng, zoom: 15 } }));
@@ -75,14 +131,9 @@ const readUseLocationPref = () => {
   }
 };
 
-// Tracks whether we've ever surfaced the browser's geolocation prompt to the
-// user. We only show it once — either the first time they ever use the
-// feature, or after they re-enable a location setting that had been turned
-// off. Subsequent clicks silently fall back to IP-based location.
+// Records that the browser's geolocation prompt has been shown (LocationBanner reads it). A tap
+// still asks again: only the automatic centring on map load never prompts
 const PROMPTED_KEY = 'geolocation_prompted';
-const hasPrompted = () => {
-  try { return localStorage.getItem(PROMPTED_KEY) === '1'; } catch { return false; }
-};
 const markPrompted = () => {
   try { localStorage.setItem(PROMPTED_KEY, '1'); } catch { /* ignore */ }
 };
@@ -116,7 +167,7 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
       // Kept in memory for this page load, never in browser storage
       rememberIpLocation(res);
       dispatchCenter(res.lat, res.lng);
-      toast.success('Centred on your approximate location', { id: TOAST_ID });
+      toast.success(APPROXIMATE_MESSAGE, { id: TOAST_ID });
     } else {
       secureLog.error('LocateMe: all IP fallback providers failed', logCtx());
       toast.error("Couldn't determine your location", {
@@ -126,50 +177,6 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
     }
   };
 
-  const usePreciseLocation = () =>
-    new Promise<boolean>((resolve) => {
-      if (!('geolocation' in navigator)) {
-        secureLog.warn('LocateMe: geolocation API unavailable', logCtx());
-        resolve(false);
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const { latitude, longitude } = pos.coords;
-          secureLog.info('LocateMe: precise geolocation succeeded', {
-            accuracy: pos.coords.accuracy,
-            ...logCtx(),
-          });
-          markGranted();
-          dispatchCenter(latitude, longitude);
-          toast.success('Centred on your location', { id: TOAST_ID });
-          resolve(true);
-        },
-        (err) => {
-          const codeName =
-            err.code === err.PERMISSION_DENIED ? 'PERMISSION_DENIED'
-            : err.code === err.POSITION_UNAVAILABLE ? 'POSITION_UNAVAILABLE'
-            : err.code === err.TIMEOUT ? 'TIMEOUT'
-            : `UNKNOWN_${err.code}`;
-          secureLog.warn('LocateMe: precise geolocation failed', {
-            code: err.code,
-            codeName,
-            message: err.message,
-            ...logCtx(),
-          });
-          if (err.code === err.PERMISSION_DENIED) {
-            clearGranted();
-            toast.message('Location permission denied', {
-              id: TOAST_ID,
-              description: 'Falling back to approximate IP-based location.',
-            });
-          }
-          resolve(false);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    });
-
   const handleClick = async () => {
     if (loading) return;
     setLoading(true);
@@ -177,7 +184,6 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
     try {
       secureLog.info('LocateMe: clicked', logCtx());
 
-      // Check permission state first
       let permissionState: PermissionState | 'unknown' = 'unknown';
       try {
         if (navigator.permissions?.query) {
@@ -189,40 +195,39 @@ const LocateMeButton: React.FC<{ className?: string }> = ({ className }) => {
       }
       secureLog.info('LocateMe: permission state', { permissionState, ...logCtx() });
 
-      if (permissionState === 'denied') {
-        secureLog.warn('LocateMe: geolocation permission denied — using IP fallback', logCtx());
-      }
-
-      // Show the browser prompt only when:
-      //   - permission is already 'granted' (no prompt actually shown), OR
-      //   - permission is 'prompt' AND we have never asked before / the
-      //     user just re-enabled the setting (flag cleared by Settings), OR
-      //   - permission can't be read ('unknown') and GPS last succeeded.
-      const shouldRequest =
-        permissionState === 'granted' ||
-        (permissionState === 'prompt' && !hasPrompted()) ||
-        (permissionState !== 'denied' && permissionState !== 'prompt' && !hasPrompted()) ||
-        (permissionState === 'unknown' && hasGranted());
-
-      if (shouldRequest && 'geolocation' in navigator) {
-        // No prompt will appear when permission is granted, or can't be read but GPS was allowed before
+      // A tap is the user asking, so the browser may prompt every time: GPS is tried whenever the
+      // permission isn't denied. (Centring on map load never prompts: LeafletMap, useIpLocationFocus)
+      let denied = permissionState === 'denied';
+      if (!denied && 'geolocation' in navigator) {
         const noPrompt = permissionState === 'granted' || (permissionState === 'unknown' && hasGranted());
         toast.loading(
           noPrompt ? 'Getting your location…' : 'Requesting location permission…',
           { id: TOAST_ID, description: permissionState === 'prompt' ? 'Please allow location access in the prompt.' : undefined }
         );
         if (permissionState !== 'granted') markPrompted();
-        const ok = await usePreciseLocation();
-        if (ok) return;
-      } else if (permissionState === 'prompt' && hasPrompted()) {
-        secureLog.info('LocateMe: skipping repeat geolocation prompt — using IP fallback', logCtx());
+        const found = await getDevicePosition();
+        if (found.ok) {
+          secureLog.info('LocateMe: geolocation succeeded', { accuracy: found.accuracy, ...logCtx() });
+          markGranted();
+          dispatchCenter(found.lat, found.lng);
+          toast.success('Centred on your location', { id: TOAST_ID });
+          return;
+        }
+        denied = found.denied;
+      } else if (!('geolocation' in navigator)) {
+        secureLog.warn('LocateMe: geolocation API unavailable', logCtx());
       }
 
-      // Fallback: the IP location already found this page load
+      if (denied) {
+        clearGranted();
+        toast.message(DENIED_MESSAGE, { id: DENIED_TOAST_ID });
+      }
+
+      // Fallback: the IP location
       const known = peekIpLocation();
       if (known) {
         dispatchCenter(known.lat, known.lng);
-        toast.success('Centred on your approximate location', { id: TOAST_ID });
+        toast.success(APPROXIMATE_MESSAGE, { id: TOAST_ID });
         return;
       }
 
