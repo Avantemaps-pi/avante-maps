@@ -145,24 +145,43 @@ test('permission granted: centres on device GPS', async ({ page }) => {
   expect((await state(page)).centers.at(-1)).toEqual(GPS);
 });
 
-test('permission denied in the prompt: toast, then IP location', async ({ page }) => {
+test('permission denied in the prompt: the "location is off" toast, then IP location (no home: not signed in to Supabase)', async ({
+  page,
+}) => {
   await setup(page, { permission: 'prompt', result: 'denied' });
   await page.goto('/');
   const calls = await tapLocate(page);
-  await expect(page.getByText('Centred on your approximate location', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      'Centred on your approximate area (from your internet connection)',
+      { exact: true },
+    ),
+  ).toBeVisible();
   expect(await calls()).toBe(1);
   const s = await state(page);
-  expect(s.toasts).toContain('Location permission denied');
+  expect(s.toasts).toContain(
+    'Location is off for Avante Maps. Turn it on in your browser settings to use your exact location.',
+  );
   expect(s.centers.at(-1)).toEqual(IP);
 });
 
-test('prompt already dismissed once: IP location without a new prompt', async ({ page }) => {
-  await setup(page, { permission: 'prompt', result: 'success', storage: { geolocation_prompted: '1' } });
+// A tap is the user asking: the browser may prompt again (the Pi Browser can keep "prompt" after
+// one dismissed prompt, and LocateMe never tried GPS again)
+test('prompt shown before (geolocation_prompted): a tap still asks for GPS', async ({
+  page,
+}) => {
+  await setup(page, {
+    permission: 'prompt',
+    result: 'success',
+    storage: { geolocation_prompted: '1' },
+  });
   await page.goto('/');
   const calls = await tapLocate(page);
-  await expect(page.getByText('Centred on your approximate location', { exact: true })).toBeVisible();
-  expect(await calls()).toBe(0);
-  expect((await state(page)).centers.at(-1)).toEqual(IP);
+  await expect(
+    page.getByText('Centred on your location', { exact: true }),
+  ).toBeVisible();
+  expect(await calls()).toBe(1);
+  expect((await state(page)).centers.at(-1)).toEqual(GPS);
 });
 
 test('"Use my location" off hides the button; turning it on asks once on the next tap', async ({ page }) => {
@@ -252,18 +271,47 @@ test('no Permissions API, allowed: second tap uses GPS again', async ({ page }) 
   expect((await state(page)).centers.at(-1)).toEqual(GPS);
 });
 
-test('no Permissions API, denied: IP location, and the next tap does not prompt', async ({ page }) => {
+// Without a Permissions API the state reads "unknown", never "denied", so each tap asks again
+test('no Permissions API, denied: IP location, and the next tap asks again', async ({
+  page,
+}) => {
   await setup(page, { permission: 'none', result: 'denied' });
   await page.goto('/');
   const first = await tapLocate(page);
-  await expect(page.getByText('Centred on your approximate location', { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      'Centred on your approximate area (from your internet connection)',
+      { exact: true },
+    ),
+  ).toBeVisible();
   expect(await first()).toBe(1);
-  expect((await state(page)).toasts).toContain('Location permission denied');
+  expect((await state(page)).toasts).toContain(
+    'Location is off for Avante Maps. Turn it on in your browser settings to use your exact location.',
+  );
   await expect(locate(page)).not.toHaveAttribute('aria-busy', 'true');
 
   const second = await tapLocate(page);
   await expect(locate(page)).not.toHaveAttribute('aria-busy', 'true');
-  expect(await second()).toBe(0);
+  expect(await second()).toBe(1);
+  expect((await state(page)).centers.at(-1)).toEqual(IP);
+});
+
+test('permission "denied": a tap doesn\'t ask, says location is off, and uses the IP location', async ({
+  page,
+}) => {
+  await setup(page, { permission: 'denied', result: 'denied' });
+  await page.goto('/');
+  const calls = await tapLocate(page);
+  await expect(
+    page.getByText(
+      'Centred on your approximate area (from your internet connection)',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(await calls()).toBe(0);
+  expect((await state(page)).toasts).toContain(
+    'Location is off for Avante Maps. Turn it on in your browser settings to use your exact location.',
+  );
   expect((await state(page)).centers.at(-1)).toEqual(IP);
 });
 
