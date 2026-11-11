@@ -11,8 +11,10 @@ Deno.env.set('PI_API_KEY', 'test-pi-key');
 const handler = await loadHandler(new URL('./index.ts', import.meta.url).href);
 
 const OWNER = '00000000-0000-0000-0000-0000000000a1';
-// The owner's Pi account (users.pi_uid), which Pi reports as the payment's user_uid
+// The owner's uid in this Pi app: what Pi reports as the payment's user_uid and from /me
 const OWNER_PI_UID = 'pi-uid-owner-0001';
+const OWNER_USERNAME = 'JordynDaniel';
+const PI_TOKEN = 'pi-access-token-0001';
 const PAYMENT_ID = 'pay_1';
 const TXID = 'abc123';
 
@@ -39,6 +41,14 @@ interface SetupOptions {
   piAlreadyCompleted?: boolean;
   /** Who Pi says paid (default: the owner's Pi account) */
   piUserUid?: string | null;
+  /** What Pi's /me answers (default: the owner, in this app) */
+  me?: { uid?: string; username?: string };
+  /** How many of Pi's /me calls fail with a 401 first */
+  meFailures?: number;
+  /** users.pi_uid for the signed-in user */
+  ownerPiUid?: string | null;
+  /** users.username for the signed-in user */
+  ownerUsername?: string | null;
   /** How many of Pi's GET /payments/{id} calls fail first */
   piGetFailures?: number;
   /** How many credit_wallet_balance calls fail first */
@@ -50,6 +60,9 @@ interface SetupOptions {
 function setup(options: SetupOptions = {}) {
   const rpcCalls: Row[] = [];
   const credits: Row[] = [];
+  const meAuth: (string | null)[] = [];
+  const piCompletes: string[] = [];
+  let meFailures = options.meFailures ?? 0;
   let piGetFailures = options.piGetFailures ?? 0;
   let creditFailures = options.creditFailures ?? 0;
   let feeFailures = options.feeFailures ?? 0;
@@ -60,13 +73,26 @@ function setup(options: SetupOptions = {}) {
       pi_price: [{ id: 1, price_usd: options.priceUsd ?? 0.0767 }],
       payments: options.rows ?? [approvedRow()],
       notifications: [],
-      users: [{ id: OWNER, pi_uid: OWNER_PI_UID }],
+      users: [{
+        id: OWNER,
+        pi_uid: options.ownerPiUid === undefined ? OWNER_PI_UID : options.ownerPiUid,
+        username: options.ownerUsername === undefined ? OWNER_USERNAME : options.ownerUsername,
+      }],
       wallet_ledger: [],
       message_fees: [],
     },
     users: { 'owner-token': OWNER },
     external: (url, init) => {
       if (url.host !== 'api.minepi.com') return undefined;
+      if (url.pathname === '/v2/me') {
+        meAuth.push(new Headers(init?.headers).get('authorization'));
+        if (meFailures > 0) {
+          meFailures -= 1;
+          return new Response('expired', { status: 401 });
+        }
+        return Response.json(options.me ?? { uid: OWNER_PI_UID, username: OWNER_USERNAME });
+      }
+      if (url.pathname.endsWith('/complete')) piCompletes.push(url.pathname);
       if (url.pathname.endsWith('/complete') && options.piAlreadyCompleted) {
         return Response.json({ error: 'already_completed', message: 'This payment was already completed' }, { status: 400 });
       }
@@ -126,6 +152,8 @@ function setup(options: SetupOptions = {}) {
     fake,
     rpcCalls,
     credits,
+    meAuth,
+    piCompletes,
     row: () => fake.tables['payments']![0],
     notifications: () => fake.tables['notifications']!,
     ledger: () => fake.tables['wallet_ledger']!,
@@ -138,7 +166,7 @@ const call = async (metadata: Record<string, unknown> = PLAN) => {
     new Request('http://fn/complete-payment', {
       method: 'POST',
       headers: { Authorization: 'Bearer owner-token', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ paymentId: PAYMENT_ID, txid: TXID, userId: OWNER, amount: 65.19, memo: 'Small Business plan (monthly)', metadata }),
+      body: JSON.stringify({ paymentId: PAYMENT_ID, txid: TXID, userId: OWNER, amount: 65.19, memo: 'Small Business plan (monthly)', metadata, piAccessToken: PI_TOKEN }),
     }),
   );
   return { status: res.status, json: await res.json() };
@@ -255,10 +283,12 @@ test('a top-up: unchanged, credited with no plan, and a topup_received notificat
     tables: {
       payments: [approvedRow({ metadata: { kind: 'wallet_topup' }, approved_amount_pi: null })],
       notifications: [],
-      users: [{ id: OWNER, pi_uid: OWNER_PI_UID }],
+      users: [{ id: OWNER, pi_uid: OWNER_PI_UID, username: OWNER_USERNAME }],
     },
     users: { 'owner-token': OWNER },
-    external: () => Response.json({ identifier: PAYMENT_ID, amount: 3, user_uid: OWNER_PI_UID }),
+    external: (url) => url.pathname === '/v2/me'
+      ? Response.json({ uid: OWNER_PI_UID, username: OWNER_USERNAME })
+      : Response.json({ identifier: PAYMENT_ID, amount: 3, user_uid: OWNER_PI_UID }),
     rpc: (name, args) => {
       assertEquals(name, 'credit_wallet_balance');
       assertEquals(args['p_amount_pi'], 3);
@@ -482,12 +512,94 @@ for (const [kind, metadata, amount, row] of [
   });
 }
 
-test('the signed-in user has no pi_uid: refused the same way', async () => {
-  const { fake, credits } = setup({ piAmount: 3, rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null })] });
-  fake.tables['users']![0]!['pi_uid'] = null;
+const topUpRow = () => approvedRow({ metadata: TOPUP, approved_amount_pi: null });
+
+// The owner's case: signed in through the Mainnet app, paying in the Testnet app
+test("users.pi_uid is another app's uid, and /me matches the payment: credited", async () => {
+  const { fake, credits, meAuth } = setup({ piAmount: 3, ownerPiUid: 'pi-uid-from-the-other-app', rows: [topUpRow()] });
   const { status, json } = await call(TOPUP);
-  assertEquals([status, json.error_code], [403, 'payment_user_mismatch']);
+  assertEquals([status, json.success], [200, true]);
+  assertEquals(credits.length, 1);
+  assertEquals(meAuth, [`Bearer ${PI_TOKEN}`]); // The user's token, once, never the API key
+  fake.restore();
+});
+
+test('the signed-in user has no pi_uid: not needed any more, credited', async () => {
+  const { fake, credits } = setup({ piAmount: 3, ownerPiUid: null, rows: [topUpRow()] });
+  assertEquals((await call(TOPUP)).status, 200);
+  assertEquals(credits.length, 1);
+  fake.restore();
+});
+
+test('the username matches in a different case: credited', async () => {
+  const { fake, credits } = setup({ piAmount: 3, me: { uid: OWNER_PI_UID, username: 'JORDYNdaniel' }, rows: [topUpRow()] });
+  assertEquals((await call(TOPUP)).status, 200);
+  assertEquals(credits.length, 1);
+  fake.restore();
+});
+
+for (const [name, options] of [
+  ["the token holder isn't the payer in this app", { me: { uid: 'pi-uid-someone-else', username: OWNER_USERNAME } }],
+  ["the payer's username isn't this account's", { me: { uid: OWNER_PI_UID, username: 'SomeoneElse' } }],
+  ['the signed-in user has no username', { ownerUsername: null }],
+] as const) {
+  test(`${name}: 403, nothing credited, row marked; a retry gets the same`, async () => {
+    const { fake, credits, row: current } = setup({ piAmount: 3, ...options, rows: [topUpRow()] });
+    const first = await call(TOPUP);
+    assertEquals([first.status, first.json.error_code, first.json.message], [403, 'payment_user_mismatch', MISMATCH]);
+    assertEquals(credits.length, 0);
+    assertEquals(current()!['status'], { approved: true, verified: true, completed: true, cancelled: false, error: 'payment_user_mismatch' });
+    const retry = await call(TOPUP);
+    assertEquals([retry.status, retry.json.error_code], [403, 'payment_user_mismatch']);
+    assertEquals(credits.length, 0);
+    fake.restore();
+  });
+}
+
+const TOKEN_INVALID_MESSAGE = 'Your Pi sign-in has expired. Close and reopen Avante Maps, then try again.';
+
+test("/me says 401: 401 pi_token_invalid, Pi not told to complete, row untouched, and a retry works", async () => {
+  const { fake, credits, piCompletes, row: current } = setup({ piAmount: 3, meFailures: 1, rows: [topUpRow()] });
+  const first = await call(TOPUP);
+  assertEquals([first.status, first.json.error_code, first.json.message], [401, 'pi_token_invalid', TOKEN_INVALID_MESSAGE]);
+  assertEquals(piCompletes.length, 0);
   assertEquals(credits.length, 0);
+  assertEquals(current()!['status'], APPROVED);
+  const retry = await call(TOPUP);
+  assertEquals([retry.status, retry.json.success], [200, true]);
+  assertEquals(piCompletes.length, 1);
+  assertEquals(credits.length, 1);
+  fake.restore();
+});
+
+test('/me says 401 on the recovery of a completed row: 401, nothing marked, and a retry credits it', async () => {
+  const { fake, credits, row: current } = setup({
+    piAmount: 3,
+    meFailures: 1,
+    rows: [approvedRow({ metadata: TOPUP, approved_amount_pi: null, txid: TXID, status: COMPLETED })],
+  });
+  const first = await call(TOPUP);
+  assertEquals([first.status, first.json.error_code], [401, 'pi_token_invalid']);
+  assertEquals(credits.length, 0);
+  assertEquals(current()!['status'], COMPLETED);
+  assertEquals((await call(TOPUP)).status, 200);
+  assertEquals(credits.length, 1);
+  fake.restore();
+});
+
+test('no piAccessToken (an old client): 400 pi_token_missing, Pi not called, row untouched', async () => {
+  const { fake, meAuth, piCompletes, row: current } = setup({ piAmount: 3, rows: [topUpRow()] });
+  const res = await handler(
+    new Request('http://fn/complete-payment', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer owner-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paymentId: PAYMENT_ID, txid: TXID, userId: OWNER, amount: 3, memo: 'Top up', metadata: TOPUP }),
+    }),
+  );
+  const json = await res.json();
+  assertEquals([res.status, json.error_code], [400, 'pi_token_missing']);
+  assertEquals([meAuth, piCompletes], [[], []]);
+  assertEquals(current()!['status'], APPROVED);
   fake.restore();
 });
 
@@ -505,6 +617,8 @@ test('logs never hold a whole Pi uid', async () => {
   const output = lines.join('\n');
   assert(!output.includes('pi-uid-someone-else'), output);
   assert(!output.includes(OWNER_PI_UID), output);
+  assert(!output.includes(OWNER_USERNAME), output);
+  assert(!output.includes(PI_TOKEN), output);
 });
 
 // ---- Top ups and message fees can't be lost on a retry
