@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -71,6 +71,7 @@ const HomeLocationSheet: React.FC<HomeLocationSheetProps> = ({
   onSave,
   isSaving,
 }) => {
+  const contentRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<Position | null>(null);
 
   // On opening: the saved home in Settings, else where the user is now
@@ -109,10 +110,17 @@ const HomeLocationSheet: React.FC<HomeLocationSheetProps> = ({
   return (
     <Sheet open={open} onOpenChange={(next) => !isSaving && onOpenChange(next)}>
       <SheetContent
+        ref={contentRef}
         side="bottom"
         hideClose
+        tabIndex={-1}
+        // Focus the sheet itself, not its first enabled button ("Skip for now" while locating)
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          contentRef.current?.focus({ preventScroll: true });
+        }}
         overlayClassName={`bg-slate-950/50 ${OVERLAY_MOTION}`}
-        className={`flex max-h-[90dvh] flex-col gap-3 overflow-y-auto rounded-t-[20px] bg-background px-4 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))] ${SHEET_MOTION}`}
+        className={`flex max-h-[90dvh] flex-col outline-hidden gap-3 overflow-y-auto rounded-t-[20px] bg-background px-4 pt-2 pb-[max(1.5rem,env(safe-area-inset-bottom))] ${SHEET_MOTION}`}
       >
         <div
           className="h-1 w-9 shrink-0 self-center rounded-full bg-input"

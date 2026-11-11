@@ -84,6 +84,16 @@
   }
 }
 
+/* In the home location picker's small map: a small pill in its own corner, never lifted for the
+   bottom nav or hidden with the full-screen map's controls */
+[data-home-picker] .leaflet-container .leaflet-bottom .leaflet-control-attribution {
+  margin: 0 6px 6px 0;
+  font-size: 10px;
+  line-height: 14px;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
 /* Hidden with the other bottom controls while the on-screen keyboard is open;
    it keeps its position so it reappears where it was */
 .keyboard-open .leaflet-container .leaflet-bottom .leaflet-control-attribution {

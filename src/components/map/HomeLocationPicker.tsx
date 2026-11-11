@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo } from 'react';
 import { Icon, type Marker as LeafletMarker } from 'leaflet';
 import {
+  AttributionControl,
   MapContainer,
   Marker,
   TileLayer,
@@ -69,9 +70,12 @@ const HomeLocationPicker: React.FC<HomeLocationPickerProps> = ({
       minZoom={minZoom}
       maxZoom={maxZoom}
       zoomControl={false}
-      attributionControl
+      // No default prefix (Leaflet's has a flag in yellow): the OpenStreetMap credit only, as on
+      // the main map
+      attributionControl={false}
       className="h-full w-full"
     >
+      <AttributionControl prefix={false} />
       <TileLayer
         url={OSM_TILE_LAYER.url}
         attribution={OSM_TILE_LAYER.attribution}
