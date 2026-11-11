@@ -1,15 +1,15 @@
 /**
- * The Update business form opens with the business's stored contact details, hours and Pi
- * wallet, and saves them back unchanged. It used to open with blanks and defaults (the list's
- * select left those columns out), so saving would overwrite the real data.
+ * Edit listing (/update-registration/$businessId): an overview with one row per section, each
+ * opening its own screen (/update-registration/$businessId/$section) with only that section's
+ * fields and one Save, which saves only that section's columns.
  *
- * 375x812 with the sandbox session, a fake Supabase session (the page reads the session user)
+ * 360x780 with the sandbox session, a fake Supabase session (the page reads the session user)
  * and mocked Supabase tables.
  */
 import { test, expect, type Page } from './helpers/fixtures';
 import { mockMap, NEARBY_BUSINESSES, mockUser } from './helpers/mapMocks';
 
-test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
+test.use({ viewport: { width: 360, height: 780 }, hasTouch: true, isMobile: true });
 
 const SUPABASE = 'https://xvpwbocwasbtzrzrxyvu.supabase.co';
 const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -33,7 +33,7 @@ const HOURS = {
   saturday: { open: '09:00', close: '13:00', closed: false },
   sunday: { open: '10:00', close: '16:00', closed: true },
 };
-const WALLET = 'GBHARBOURLIGHTCOFFEESTOREDWALLETADDRESS0000000000000000';
+const WALLET = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
 const ID = 56;
 const ROW = {
   id: ID, business_name: 'Harbour Light Coffee', owner_id: mockUser.uid, category: 'Coffee Shop', business_description: 'Coffee by the harbour, roasted in small batches every week.',
@@ -43,6 +43,7 @@ const ROW = {
   contact_info: CONTACT, hours: HOURS, pi_wallet_address: WALLET,
   notify_new_message_email: true, contact_email_verified_for: null,
 };
+const PHOTO = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="%232563EB"/></svg>';
 
 const NEW_POSITION = { lat: -33.9321, lng: 18.8602 };
 
@@ -64,7 +65,7 @@ async function setup(page: Page, row: Record<string, unknown> = ROW, geocoder: '
     const id = url.searchParams.get('id');
     const owner = url.searchParams.get('owner_id');
     const match = (!id || id === `eq.${ID}`) && (!owner || owner === `eq.${mockUser.uid}`);
-    // Only the columns asked for, as PostgREST does: the original bug was a select missing some
+    // Only the columns asked for, as PostgREST does
     const select = url.searchParams.get('select') ?? '*';
     const columns = select.split(',').map((c) => c.trim());
     const picked = select === '*' ? row : Object.fromEntries(Object.entries(row).filter(([key]) => columns.includes(key)));
@@ -86,389 +87,246 @@ const fromList = async (page: Page) => {
   await page.getByRole('button', { name: 'Edit' }).first().tap();
   await page.waitForURL(`**/update-registration/${ID}`);
 };
-const tab = (page: Page, name: string) => page.getByRole('tab', { name, exact: true });
+const sections = (page: Page) => page.getByRole('list', { name: 'Listing sections' });
+const row = (page: Page, title: string) => sections(page).getByRole('link', { name: new RegExp(`^${title}`) });
+const summary = (page: Page, id: string) => page.getByTestId(`summary-${id}`);
+const save = (page: Page) => page.getByRole('button', { name: 'Save', exact: true });
+const overviewUrl = `/update-registration/${ID}`;
+const path = (page: Page) => new URL(page.url()).pathname;
 
-async function expectStoredValues(page: Page) {
-  await tab(page, 'Contact').tap();
-  await expect(page.locator('#email')).toHaveValue(CONTACT.email);
-  await expect(page.locator('#phone')).toHaveValue('215550123');
-  await expect(page.getByRole('combobox').first()).toContainText('+27');
-  await expect(page.locator('#website')).toHaveValue(CONTACT.website);
-
-  await tab(page, 'Hours').tap();
-  const times = page.locator('input[type="time"]');
-  await expect(times).toHaveCount(14);
-  await expect(times.nth(0)).toHaveValue('08:00');
-  await expect(times.nth(1)).toHaveValue('18:00');
-  await expect(times.nth(2)).toHaveValue('08:30');
-  await expect(times.nth(9)).toHaveValue('21:00');
-  await expect(times.nth(10)).toHaveValue('09:00');
-  await expect(times.nth(11)).toHaveValue('13:00');
-  const closed = page.getByRole('checkbox');
-  await expect(closed.nth(0)).not.toBeChecked();
-  await expect(closed.nth(6)).toBeChecked();
-
-  await tab(page, 'Details').tap();
-  await expect(page.locator('#piWalletAddress')).toHaveValue(WALLET);
+async function openSection(page: Page, title: string, slug: string) {
+  await row(page, title).tap();
+  await page.waitForURL(`**${overviewUrl}/${slug}`);
+  await expect(page.getByRole('heading', { name: title })).toBeVisible();
 }
 
-async function submit(page: Page) {
-  await tab(page, 'Preview').tap();
-  await page.getByRole('button', { name: 'Submit Registration' }).tap();
-}
+const HOURS_SUMMARY = 'Mon 08:00–18:00 · Tue 08:30–18:00 · Wed 08:00–18:00 · Thu 08:00–20:00 · Fri 08:00–21:00 · Sat 09:00–13:00 · Closed Sun';
 
-test('from Your businesses → Edit: the stored contact details, hours and wallet are filled in', async ({ page }) => {
+// ---- The overview
+
+test('the overview: the business, then six section rows with their summaries', async ({ page }) => {
   const { gets } = await setup(page);
   await fromList(page);
-  await expectStoredValues(page);
-  // The list asked for them, so the edit page needed no second load
-  const list = gets.find((q) => q.includes('business_name'))!;
-  for (const column of ['contact_info', 'hours', 'pi_wallet_address']) expect(list).toContain(column);
+  await expect(page.locator('#page-title')).toHaveText('Edit listing');
+  await expect(page.getByRole('heading', { name: 'Harbour Light Coffee' })).toBeVisible();
+  await expect(page.getByText(`Owner @${mockUser.username}`)).toBeVisible();
+  await expect(page.getByText('Not verified yet')).toBeVisible();
+
+  const links = sections(page).getByRole('link');
+  await expect(links).toHaveCount(6);
+  const titles = await links.evaluateAll((els) => els.map((el) => el.querySelector('span > span')?.textContent));
+  expect(titles).toEqual(['Name and category', 'Address', 'Contact', 'Hours', 'Photos and description', 'Payout wallet']);
+
+  await expect(summary(page, 'name')).toHaveText('Harbour Light Coffee · Coffee Shop');
+  await expect(summary(page, 'address')).toHaveText('12 Dock Road, Cape Town');
+  await expect(summary(page, 'contact')).toHaveText('Phone · Email · Website');
+  await expect(summary(page, 'hours')).toHaveText(HOURS_SUMMARY);
+  await expect(summary(page, 'photos')).toHaveText('No photos · 10 words');
+  await expect(summary(page, 'wallet')).toHaveText('GBRP…OX2H');
+  await expect(summary(page, 'wallet')).toHaveCSS('font-family', /mono/i);
+
+  // Bordered list rows at least 56px tall; a long summary ends in an ellipsis on one line
+  for (const link of await links.all()) {
+    expect(Math.round((await link.boundingBox())!.height)).toBeGreaterThanOrEqual(56);
+  }
+  await expect(summary(page, 'hours')).toHaveCSS('text-overflow', 'ellipsis');
+  await expect(summary(page, 'hours')).toHaveCSS('white-space', 'nowrap');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  // No Owner or Preview step, and no step chips
+  await expect(page.getByRole('tab')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Submit Registration' })).toHaveCount(0);
+
+  // The list brought everything, so the page needed no second load
   expect(gets.filter((q) => q.includes(`id=eq.${ID}`))).toHaveLength(0);
 });
 
-test('a direct load fills in the same values, loading by the route id for the session user', async ({ page }) => {
+test('the first photo heads the overview; the status reads Verified or Certified', async ({ page }) => {
+  await setup(page, { ...ROW, images: [PHOTO, PHOTO, PHOTO], is_verified: true });
+  await page.goto(overviewUrl);
+  await expect(page.getByText('Verified', { exact: true })).toBeVisible();
+  await expect(page.locator('main img').first()).toHaveAttribute('src', PHOTO);
+  await expect(summary(page, 'photos')).toHaveText('3 photos · 10 words');
+});
+
+test('a certified business reads Certified', async ({ page }) => {
+  await setup(page, { ...ROW, is_verified: true, is_certified: true });
+  await page.goto(overviewUrl);
+  await expect(page.getByText('Certified', { exact: true })).toBeVisible();
+});
+
+test('a direct load reads the business by the route id for the session user', async ({ page }) => {
   const { gets } = await setup(page);
-  await page.goto(`/update-registration/${ID}`);
-  await expectStoredValues(page);
+  await page.goto(overviewUrl);
+  await expect(row(page, 'Hours')).toBeVisible();
   expect(gets.some((q) => q.includes(`id=eq.${ID}`) && q.includes(`owner_id=eq.${mockUser.uid}`))).toBe(true);
-  await expect(page.getByText('No business data found')).toHaveCount(0);
 });
 
-test('a reload keeps working', async ({ page }) => {
-  await setup(page);
-  await fromList(page);
-  await page.reload();
-  await expectStoredValues(page);
-});
-
-test("someone else's business, or no such id: a message, no form", async ({ page }) => {
+test("someone else's business, or no such id: the existing message, no rows", async ({ page }) => {
   await setup(page);
   await page.goto('/update-registration/999');
   await expect(page.getByText("We couldn't find this business on your account.")).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Contact', exact: true })).toHaveCount(0);
+  await expect(sections(page)).toHaveCount(0);
+  // Nor a section of it
+  await page.goto('/update-registration/999/hours');
+  await expect(page.getByText("We couldn't find this business on your account.")).toBeVisible();
+  await expect(page.locator('input[type="time"]')).toHaveCount(0);
 });
 
-test('a direct load with no Supabase session: asks to log in, no form, no business query', async ({ page }) => {
+test('no Supabase session: asks to log in, no rows, no business query', async ({ page }) => {
   const { gets } = await setup(page);
   await page.addInitScript(() => localStorage.removeItem('supabase.auth.token'));
-  await page.goto(`/update-registration/${ID}`);
+  await page.goto(overviewUrl);
   await expect(page.getByText('Please log in to edit your business.')).toBeVisible();
-  await expect(page.getByRole('tab', { name: 'Contact', exact: true })).toHaveCount(0);
+  await expect(sections(page)).toHaveCount(0);
   expect(gets.filter((q) => q.includes(`id=eq.${ID}`))).toHaveLength(0);
 });
 
-test('changing only the email saves it, with everything else as stored', async ({ page }) => {
-  const { patches, geocoded } = await setup(page);
-  await fromList(page);
-  await tab(page, 'Contact').tap();
-  await page.locator('#email').fill('new@harbour.example');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  const body = patches[0]!;
-  expect(body['contact_info']).toEqual({ ...CONTACT, email: 'new@harbour.example' });
-  expect(body['hours']).toEqual(HOURS);
-  expect(body['pi_wallet_address']).toBe(WALLET);
-  // The confirmation stays the server's: a new email reads "Not confirmed" until it's confirmed
-  expect(body).not.toHaveProperty('contact_email_verified_for');
-  expect(body).not.toHaveProperty('contact_email_verified_at');
-  // The address is unchanged, so the pin isn't touched
-  expect(body['city']).toBe(ROW.city);
-  expect(body).not.toHaveProperty('lat');
-  expect(body).not.toHaveProperty('lng');
-  expect(body).not.toHaveProperty('coordinates');
-  expect(geocoded).toEqual([]);
-});
-
-test('a business loaded without contact_info, hours and wallet: saving leaves them out', async ({ page }) => {
-  const { contact_info: _c, hours: _h, pi_wallet_address: _w, ...partial } = ROW;
-  const { patches } = await setup(page, partial);
-  await page.goto(`/update-registration/${ID}`);
-  // The form still needs valid values to submit, but they aren't real data
-  await tab(page, 'Contact').tap();
-  await page.locator('#email').fill('typed@example.com');
-  await page.locator('#phone').fill('215550123');
-  await tab(page, 'Details').tap();
-  await page.locator('#piWalletAddress').fill('GTYPEDWALLET');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  const body = patches[0]!;
-  expect(body).not.toHaveProperty('contact_info');
-  expect(body).not.toHaveProperty('hours');
-  expect(body).not.toHaveProperty('pi_wallet_address');
-  expect(body['business_name']).toBe(ROW.business_name);
-  await expect(page.getByText("Some details couldn't be loaded", { exact: false }).first()).toBeVisible();
-});
-
-test('the header with Go back stays visible at the top, even scrolled down a long step', async ({ page }) => {
+test('View listing opens the public business page', async ({ page }) => {
   await setup(page);
-  await fromList(page);
-  const header = page.locator('header').first();
-  await expect(page.getByRole('button', { name: 'Go back' })).toBeVisible();
-  await expect(page.locator('#page-title')).toHaveText('Update Business');
-  expect((await header.boundingBox())!.y).toBe(0);
-
-  await tab(page, 'Preview').tap();
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-  expect((await header.boundingBox())!.y).toBe(0);
-  await expect(page.getByRole('button', { name: 'Go back' })).toBeInViewport();
-});
-
-test('other scrolling pages keep their header in view, with no sideways scroll', async ({ page }) => {
-  await setup(page);
-  await page.goto('/pricing');
-  await expect(page.getByRole('button', { name: 'Go back' })).toBeVisible();
-  await page.evaluate(() => window.scrollTo(0, 400));
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-  expect((await page.locator('header').first().boundingBox())!.y).toBe(0);
-  const sideways = await page.evaluate(() => {
-    window.scrollTo(500, window.scrollY);
-    return window.scrollX;
-  });
-  expect(sideways).toBe(0);
-});
-
-for (const search of ['', '?field=nonsense', '?field=constructor']) {
-  test(`opened with "${search}": the first tab, and nothing focused or changed`, async ({ page }) => {
-    await setup(page);
-    await page.goto(`/update-registration/${ID}${search}`);
-    await expect(tab(page, 'Owner')).toHaveAttribute('aria-selected', 'true');
-    await expect(tab(page, 'Details')).toHaveAttribute('aria-selected', 'false');
-    await expect(page.locator('#piWalletAddress')).toHaveCount(0);
-    expect(new URL(page.url()).search).toBe(search);
-  });
-}
-
-test('opened directly on the field: Go back has nowhere earlier, so goes to Your businesses', async ({ page }) => {
-  await setup(page);
-  await page.goto(`/update-registration/${ID}?field=piWalletAddress`);
-  await expect(tab(page, 'Details')).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('#piWalletAddress')).toBeFocused();
-  await expect.poll(() => new URL(page.url()).search).toBe('');
-  await page.getByRole('button', { name: 'Go back' }).tap();
-  await page.waitForURL('**/registered-business');
+  await page.goto(overviewUrl);
+  const view = page.getByRole('link', { name: 'View listing' });
+  await expect(view).toHaveAttribute('href', `/recommendations/${ID}`);
+  await view.tap();
+  await page.waitForURL(`**/recommendations/${ID}`);
 });
 
 test('a direct load: Go back goes to Your businesses, not out of the app', async ({ page }) => {
   await setup(page);
-  await page.goto(`/update-registration/${ID}`);
-  await expect(tab(page, 'Contact')).toBeVisible();
+  await page.goto(overviewUrl);
+  await expect(row(page, 'Hours')).toBeVisible();
   await page.getByRole('button', { name: 'Go back' }).tap();
   await page.waitForURL('**/registered-business');
 });
 
-const ADDRESS_UNCHANGED = { street_address: ROW.street_address, state: ROW.state, zip_code: ROW.zip_code, country: ROW.country };
+// ---- A section
 
-test('changing the city saves it, keeps the other address fields, and moves the pin', async ({ page }) => {
-  const { patches, geocoded } = await setup(page);
+test('Hours: only the hours fields; Save → toast → the overview with the new summary, and only hours sent', async ({ page }) => {
+  const { patches } = await setup(page);
   await fromList(page);
-  await tab(page, 'Address').tap();
-  await expect(page.locator('#city')).toHaveValue(ROW.city);
-  await page.locator('#city').fill('Stellenbosch');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  const body = patches[0]!;
-  console.log(`PATCH (new city): ${JSON.stringify({ street_address: body['street_address'], city: body['city'], state: body['state'], zip_code: body['zip_code'], country: body['country'], lat: body['lat'], lng: body['lng'], coordinates: body['coordinates'] })}`);
-  expect(body).toMatchObject({ ...ADDRESS_UNCHANGED, city: 'Stellenbosch', ...NEW_POSITION });
-  // As registration stores it
-  expect(JSON.parse(body['coordinates'] as string)).toEqual(NEW_POSITION);
-  expect(body).not.toHaveProperty('location');
-  expect(geocoded).toEqual(['12 Dock Road, Stellenbosch, Western Cape, 8001, South Africa']);
-  await expect(page.getByText("couldn't update the map pin")).toHaveCount(0);
+  await openSection(page, 'Hours', 'hours');
+  await expect(page.locator('input[type="time"]')).toHaveCount(14);
+  for (const other of ['#businessName', '#streetAddress', '#email', '#piWalletAddress', '#businessDescription']) {
+    await expect(page.locator(other)).toHaveCount(0);
+  }
+  await expect(page.locator('#page-title')).toHaveText('Edit listing');
+  await expect(page.getByRole('button', { name: 'Go back' })).toBeVisible();
+
+  // Save: full width at the bottom of the section
+  const button = (await save(page).boundingBox())!;
+  expect(Math.round(button.width)).toBeGreaterThanOrEqual(360 - 2 * 24);
+
+  await page.locator('input[type="time"]').nth(2).fill('08:00'); // Tuesday opens at 08:00
+  await save(page).tap();
+  await expect(page.getByText('Hours saved')).toBeVisible();
+  await page.waitForURL(`**${overviewUrl}`);
+  expect(path(page)).toBe(overviewUrl);
+  await expect(summary(page, 'hours')).toHaveText('Mon–Wed 08:00–18:00 · Thu 08:00–20:00 · Fri 08:00–21:00 · Sat 09:00–13:00 · Closed Sun');
+
+  expect(patches).toHaveLength(1);
+  expect(Object.keys(patches[0]!)).toEqual(['hours']);
+  expect(patches[0]!['hours']).toEqual({ ...HOURS, tuesday: { ...HOURS.tuesday, open: '08:00' } });
+  // Every other summary as before
+  await expect(summary(page, 'contact')).toHaveText('Phone · Email · Website');
+  await expect(summary(page, 'wallet')).toHaveText('GBRP…OX2H');
+
+  // Back from the overview leaves Edit listing: the section isn't left in the history
+  await page.getByRole('button', { name: 'Go back' }).tap();
+  await page.waitForURL('**/registered-business');
 });
 
-test('when the geocoder fails: the address is saved, the position stays, a toast says so', async ({ page }) => {
-  const { patches, geocoded } = await setup(page, ROW, 'fails');
-  await fromList(page);
-  await tab(page, 'Address').tap();
-  await page.locator('#city').fill('Stellenbosch');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  const body = patches[0]!;
-  console.log(`PATCH (geocoder failed): ${JSON.stringify({ street_address: body['street_address'], city: body['city'], state: body['state'], zip_code: body['zip_code'], country: body['country'], lat: body['lat'], lng: body['lng'], coordinates: body['coordinates'] })}`);
-  expect(body).toMatchObject({ ...ADDRESS_UNCHANGED, city: 'Stellenbosch' });
-  expect(body).not.toHaveProperty('lat');
-  expect(body).not.toHaveProperty('lng');
-  expect(body).not.toHaveProperty('coordinates');
-  expect(geocoded).toHaveLength(1);
-  await expect(page.getByText("Address saved, but we couldn't update the map pin")).toBeVisible();
-});
-
-const STREET_WITH_UNIT = { ...ROW, street_address: '12 Dock Road, Unit 4' };
-const HINT = 'Include the apartment, suite or unit here, e.g. 12 Dock Road, Unit 4';
-
-test('the Address tab has no Apartment box; a hint describes the street input', async ({ page }) => {
+test('a reload on a section route stays on that section', async ({ page }) => {
   await setup(page);
   await fromList(page);
-  await tab(page, 'Address').tap();
-  await expect(page.locator('#streetAddress')).toBeVisible();
-  await expect(page.locator('#apartment')).toHaveCount(0);
-  const hint = page.getByText(HINT, { exact: true });
-  await expect(hint).toBeVisible();
-  await expect(hint).toHaveCSS('font-size', '13px');
-  await expect(page.locator('#streetAddress')).toHaveAttribute('aria-describedby', (await hint.getAttribute('id'))!);
-  // Under the input
-  expect((await hint.boundingBox())!.y).toBeGreaterThan((await page.locator('#streetAddress').boundingBox())!.y);
+  await openSection(page, 'Hours', 'hours');
+  await page.reload();
+  expect(path(page)).toBe(`${overviewUrl}/hours`);
+  await expect(page.getByRole('heading', { name: 'Hours' })).toBeVisible();
+  await expect(page.locator('input[type="time"]').nth(1)).toHaveValue('18:00');
 });
 
-test('a unit in the stored street stays once: changing only the city leaves the street as it was', async ({ page }) => {
-  const { patches } = await setup(page, STREET_WITH_UNIT);
+test('a section opened directly: Back goes to the overview', async ({ page }) => {
+  await setup(page);
+  await page.goto(`${overviewUrl}/address`);
+  await expect(page.locator('#city')).toHaveValue('Cape Town');
+  await page.getByRole('button', { name: 'Go back' }).tap();
+  await page.waitForURL(`**${overviewUrl}`);
+  await expect(row(page, 'Address')).toBeVisible();
+});
+
+test('unsaved changes + Back: the unsaved-changes dialog; Stay keeps them, Leave drops them', async ({ page }) => {
+  const { patches } = await setup(page);
   await fromList(page);
-  await tab(page, 'Address').tap();
-  await expect(page.locator('#streetAddress')).toHaveValue('12 Dock Road, Unit 4');
-  await page.locator('#city').fill('Stellenbosch');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  expect(patches[0]).toMatchObject({ street_address: '12 Dock Road, Unit 4', city: 'Stellenbosch' });
-  expect(patches[0]).not.toHaveProperty('address_components');
-});
+  await openSection(page, 'Name and category', 'name');
+  await page.locator('#businessName').fill('Harbour Light Roasters');
+  await page.getByRole('button', { name: 'Go back' }).tap();
+  const dialog = page.getByRole('alertdialog', { name: 'Unsaved Changes' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Stay on Page' }).tap();
+  await expect(dialog).toHaveCount(0);
+  expect(path(page)).toBe(`${overviewUrl}/name`);
+  await expect(page.locator('#businessName')).toHaveValue('Harbour Light Roasters');
 
-test('changing the street and unit saves exactly what was typed, and geocodes it', async ({ page }) => {
-  const { patches, geocoded } = await setup(page, STREET_WITH_UNIT);
-  await fromList(page);
-  await tab(page, 'Address').tap();
-  await page.locator('#streetAddress').fill('14 Dock Road, Unit 9');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  expect(patches[0]).toMatchObject({ street_address: '14 Dock Road, Unit 9', ...NEW_POSITION });
-  expect(patches[0]).not.toHaveProperty('address_components');
-  expect(geocoded).toEqual(['14 Dock Road, Unit 9, Cape Town, Western Cape, 8001, South Africa']);
-});
-
-test('an address not loaded is left out of the save, and nothing is geocoded', async ({ page }) => {
-  const { city: _city, ...partial } = ROW;
-  const { patches, geocoded } = await setup(page, partial);
-  await page.goto(`/update-registration/${ID}`);
-  await tab(page, 'Address').tap();
-  await page.locator('#city').fill('Typed City');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  expect(patches[0]).not.toHaveProperty('city');
-  expect(patches[0]).toMatchObject(ADDRESS_UNCHANGED);
-  expect(geocoded).toEqual([]);
-});
-
-test('an invalid stored website: Submit jumps to Contact, shows the error, focuses the field, sends nothing', async ({ page }) => {
-  const { patches } = await setup(page, { ...ROW, contact_info: { ...CONTACT, website: 'https://harbour.example' } });
-  await fromList(page);
-  await submit(page);
-  await expect(tab(page, 'Contact')).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByText('Website URL must start with https:// and contain a .pinet subdomain', { exact: false })).toBeVisible();
-  await expect(page.locator('#website')).toBeFocused();
-  await expect(page.locator('#website')).toBeInViewport();
-  await expect(page.getByText('Fix the highlighted field to save')).toBeVisible();
+  // Browser Back asks too
+  await page.goBack();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Leave Page' }).tap();
+  await page.waitForURL(`**${overviewUrl}`);
+  await expect(summary(page, 'name')).toHaveText('Harbour Light Coffee · Coffee Shop');
   expect(patches).toEqual([]);
 });
 
-test('fixing the field then lets the save go through', async ({ page }) => {
-  const { patches } = await setup(page, { ...ROW, contact_info: { ...CONTACT, website: 'https://harbour.example' } });
+test('no changes: Back leaves without asking', async ({ page }) => {
+  await setup(page);
   await fromList(page);
-  await submit(page);
-  await expect(page.locator('#website')).toBeFocused();
-  await page.locator('#website').fill(CONTACT.website);
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  expect((patches[0]!['contact_info'] as { website: string }).website).toBe(CONTACT.website);
+  await openSection(page, 'Contact', 'contact');
+  await page.getByRole('button', { name: 'Go back' }).tap();
+  await page.waitForURL(`**${overviewUrl}`);
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
 });
 
-for (const width of [320, 375]) {
-  test.describe(`the Hours step at ${width}px`, () => {
-    test.use({ viewport: { width, height: 812 } });
-
-    test('every time fits inside its card, with 44px tap targets', async ({ page }) => {
-      await setup(page);
-      await fromList(page);
-      await tab(page, 'Hours').tap();
-      const card = (await page.getByText('Trading Hours').locator('xpath=ancestor::div[contains(@class,"shadow-xs")][1]').boundingBox())!;
-      const times = page.locator('input[type="time"]');
-      await expect(times).toHaveCount(14);
-      for (const input of await times.all()) {
-        const box = (await input.boundingBox())!;
-        expect(box.x).toBeGreaterThanOrEqual(card.x);
-        expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
-        expect(Math.round(box.height)).toBeGreaterThanOrEqual(44);
-      }
-      // Opening and closing share a line, with a gap
-      const open = (await times.nth(0).boundingBox())!;
-      const close = (await times.nth(1).boundingBox())!;
-      expect(close.y).toBe(open.y);
-      expect(close.x).toBeGreaterThanOrEqual(open.x + open.width);
-      // The whole "Closed" label is the tap target, and tapping it toggles the day
-      const closed = page.getByRole('checkbox', { name: 'Monday closed' });
-      const label = closed.locator('xpath=ancestor::label');
-      const hit = (await label.boundingBox())!;
-      expect(Math.round(hit.height)).toBeGreaterThanOrEqual(44);
-      expect(Math.round(hit.width)).toBeGreaterThanOrEqual(44);
-      await label.getByText('Closed').tap();
-      await expect(closed).toBeChecked();
-      await expect(times.nth(0)).toBeDisabled();
-    });
-  });
-}
-
-test.describe('the Hours step at 1024px', () => {
-  test.use({ viewport: { width: 1024, height: 900 } });
-
-  test('stays one row per day', async ({ page }) => {
-    await setup(page);
-    await fromList(page);
-    await tab(page, 'Hours').tap();
-    const closed = (await page.getByRole('checkbox', { name: 'Monday closed' }).boundingBox())!;
-    const open = (await page.locator('input[type="time"]').nth(0).boundingBox())!;
-    const close = (await page.locator('input[type="time"]').nth(1).boundingBox())!;
-    expect(Math.abs(closed.y + closed.height / 2 - (open.y + open.height / 2))).toBeLessThanOrEqual(4);
-    expect(close.y).toBe(open.y);
-    expect(closed.x).toBeLessThan(open.x);
-  });
+test('Name and category: only the name and types, saving only those columns', async ({ page }) => {
+  const { patches } = await setup(page);
+  await fromList(page);
+  await openSection(page, 'Name and category', 'name');
+  await expect(page.locator('#businessName')).toHaveValue('Harbour Light Coffee');
+  await expect(page.locator('input[type="time"]')).toHaveCount(0);
+  await page.locator('#businessName').fill('Harbour Light Roasters');
+  await save(page).tap();
+  await expect(page.getByText('Name and category saved')).toBeVisible();
+  await page.waitForURL(`**${overviewUrl}`);
+  await expect(summary(page, 'name')).toHaveText('Harbour Light Roasters · Coffee Shop');
+  expect(patches).toEqual([{ business_name: 'Harbour Light Roasters', business_types: ['Food'] }]);
 });
 
-// ---- New-message emails switch (Contact tab, under the email)
+// ---- Contact
 
 const emailSwitch = (page: Page) => page.getByRole('switch', { name: 'Email me when a customer messages this business' });
 const CONFIRMED = 'Sent to your confirmed contact email.';
 const UNCONFIRMED = 'Confirm your contact email in CommuniCon to get these emails.';
 
-test('the new-message email switch loads its stored value, and saving sends the change', async ({ page }) => {
-  const { patches } = await setup(page, { ...ROW, notify_new_message_email: false, contact_email_verified_for: CONTACT.email });
+test('Contact: changing the email saves contact_info and the switch only, and never the confirmation', async ({ page }) => {
+  const { patches, geocoded } = await setup(page);
   await fromList(page);
-  await tab(page, 'Contact').tap();
-  await expect(emailSwitch(page)).toHaveAttribute('aria-checked', 'false');
-  await expect(page.getByText(CONFIRMED)).toBeVisible();
-  // Under the email field, above the website
-  const switchBox = (await emailSwitch(page).boundingBox())!;
-  expect(switchBox.y).toBeGreaterThan((await page.locator('#email').boundingBox())!.y);
-  expect(switchBox.y).toBeLessThan((await page.locator('#website').boundingBox())!.y);
-
-  await emailSwitch(page).tap();
-  await expect(emailSwitch(page)).toHaveAttribute('aria-checked', 'true');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
+  await openSection(page, 'Contact', 'contact');
+  await expect(page.locator('#phone')).toHaveValue('215550123');
+  await expect(page.getByRole('combobox').first()).toContainText('+27');
+  await page.locator('#email').fill('new@harbour.example');
+  await save(page).tap();
+  await expect(page.getByText('Contact saved')).toBeVisible();
+  await page.waitForURL(`**${overviewUrl}`);
+  expect(patches).toHaveLength(1);
+  expect(Object.keys(patches[0]!).sort()).toEqual(['contact_info', 'notify_new_message_email']);
+  expect(patches[0]!['contact_info']).toEqual({ ...CONTACT, email: 'new@harbour.example' });
   expect(patches[0]!['notify_new_message_email']).toBe(true);
+  expect(geocoded).toEqual([]);
 });
 
-test('the switch defaults to on, and saving unchanged keeps it on', async ({ page }) => {
-  const { patches } = await setup(page);
-  await page.goto(`/update-registration/${ID}`);
-  await tab(page, 'Contact').tap();
-  await expect(emailSwitch(page)).toHaveAttribute('aria-checked', 'true');
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  expect(patches[0]!['notify_new_message_email']).toBe(true);
-});
-
-test("an unconfirmed contact email: the helper says to confirm it; a changed email isn't confirmed either", async ({ page }) => {
-  await setup(page);
-  await page.goto(`/update-registration/${ID}`);
-  await tab(page, 'Contact').tap();
-  await expect(page.getByText(UNCONFIRMED)).toBeVisible();
-  await expect(page.getByText(CONFIRMED)).toHaveCount(0);
-});
-
-test('a confirmed email reads as confirmed until a different one is typed', async ({ page }) => {
+test('contact verification: a confirmed email reads verified on the overview and in Contact, until another is typed', async ({ page }) => {
   await setup(page, { ...ROW, contact_email_verified_for: CONTACT.email });
-  await page.goto(`/update-registration/${ID}`);
-  await tab(page, 'Contact').tap();
+  await page.goto(overviewUrl);
+  await expect(summary(page, 'contact')).toHaveText('Phone · Email verified · Website');
+  await openSection(page, 'Contact', 'contact');
   await expect(page.getByText(CONFIRMED)).toBeVisible();
   await page.locator('#email').fill('new@harbour.example');
   await expect(page.getByText(UNCONFIRMED)).toBeVisible();
@@ -477,84 +335,169 @@ test('a confirmed email reads as confirmed until a different one is typed', asyn
   await expect(page.getByText(CONFIRMED)).toBeVisible();
 });
 
-test('a business loaded without the switch column: saving leaves it out', async ({ page }) => {
-  const { notify_new_message_email: _n, ...partial } = ROW;
-  const { patches } = await setup(page, partial);
-  await page.goto(`/update-registration/${ID}`);
-  await submit(page);
+test('the new-message email switch loads its stored value and saves the change', async ({ page }) => {
+  const { patches } = await setup(page, { ...ROW, notify_new_message_email: false });
+  await page.goto(`${overviewUrl}/contact`);
+  await expect(emailSwitch(page)).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByText(UNCONFIRMED)).toBeVisible();
+  await emailSwitch(page).tap();
+  await save(page).tap();
   await expect.poll(() => patches.length).toBe(1);
-  expect(patches[0]).not.toHaveProperty('notify_new_message_email');
+  expect(patches[0]!['notify_new_message_email']).toBe(true);
 });
 
-// users.username can't be changed by its user any more (the payer check compares it with Pi's):
-// the owner's Pi username is shown as text, never as a field to type in
-test('the Owner tab shows the Pi username as text, with no username input', async ({
-  page,
-}) => {
+test('an invalid stored website: Contact shows the error, focuses it, sends nothing; Hours still saves', async ({ page }) => {
+  const { patches } = await setup(page, { ...ROW, contact_info: { ...CONTACT, website: 'https://harbour.example' } });
+  await page.goto(`${overviewUrl}/contact`);
+  await save(page).tap();
+  await expect(page.getByText('Website URL must start with https:// and contain a .pinet subdomain', { exact: false })).toBeVisible();
+  await expect(page.locator('#website')).toBeFocused();
+  await expect(page.getByText('Fix the highlighted field to save')).toBeVisible();
+  expect(patches).toEqual([]);
+
+  // Another section's stored value doesn't stop this one
+  await page.goto(`${overviewUrl}/hours`);
+  await page.locator('input[type="time"]').nth(1).fill('17:00');
+  await save(page).tap();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(Object.keys(patches[0]!)).toEqual(['hours']);
+});
+
+// ---- Address
+
+const ADDRESS_UNCHANGED = { street_address: ROW.street_address, state: ROW.state, zip_code: ROW.zip_code, country: ROW.country };
+
+test('Address: no Apartment box; a new city saves the address columns only, and moves the pin', async ({ page }) => {
+  const { patches, geocoded } = await setup(page);
+  await fromList(page);
+  await openSection(page, 'Address', 'address');
+  await expect(page.locator('#apartment')).toHaveCount(0);
+  await page.locator('#city').fill('Stellenbosch');
+  await save(page).tap();
+  await expect(page.getByText('Address saved', { exact: true })).toBeVisible();
+  await page.waitForURL(`**${overviewUrl}`);
+  await expect(summary(page, 'address')).toHaveText('12 Dock Road, Stellenbosch');
+  expect(patches).toHaveLength(1);
+  expect(patches[0]).toEqual({ ...ADDRESS_UNCHANGED, city: 'Stellenbosch', ...NEW_POSITION, coordinates: JSON.stringify(NEW_POSITION) });
+  expect(geocoded).toEqual(['12 Dock Road, Stellenbosch, Western Cape, 8001, South Africa']);
+});
+
+test('when the geocoder fails: the address is saved, the position stays, a toast says so', async ({ page }) => {
+  const { patches } = await setup(page, ROW, 'fails');
+  await page.goto(`${overviewUrl}/address`);
+  await page.locator('#city').fill('Stellenbosch');
+  await save(page).tap();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(patches[0]).toEqual({ ...ADDRESS_UNCHANGED, city: 'Stellenbosch' });
+  await expect(page.getByText("Address saved, but we couldn't update the map pin")).toBeVisible();
+});
+
+// Nothing ties the Verified badge to the address today (verify-business checks the wallet and the
+// confirmed contact email; no trigger resets it), so no business gets a warning before saving
+for (const [kind, flags] of [
+  ['verified', { is_verified: true, verification_status: 'verified' }],
+  ['unverified', {}],
+] as const) {
+  test(`a ${kind} business changing its address: no warning, it saves straight away`, async ({ page }) => {
+    const { patches } = await setup(page, { ...ROW, ...flags });
+    await page.goto(`${overviewUrl}/address`);
+    await page.locator('#streetAddress').fill('14 Dock Road');
+    await save(page).tap();
+    await expect(page.getByText('Address saved', { exact: true })).toBeVisible();
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).not.toHaveProperty('is_verified');
+    expect(patches[0]).toMatchObject({ street_address: '14 Dock Road' });
+  });
+}
+
+// ---- Photos and description
+
+test('Photos: three photos already, so no more can be added', async ({ page }) => {
+  await setup(page, { ...ROW, images: [PHOTO, PHOTO, PHOTO] });
+  await page.goto(overviewUrl);
+  await openSection(page, 'Photos and description', 'photos');
+  await expect(page.getByText('(3/3)')).toBeVisible();
+  await expect(page.locator('input[type="file"]')).toHaveCount(1);
+  await expect(page.locator('input[type="file"]')).toBeDisabled();
+  await expect(page.getByText('Add Image')).toHaveCount(0);
+  await expect(page.locator('#businessDescription')).toBeVisible();
+});
+
+test('Photos: removing one saves the other two and the description, nothing else', async ({ page }) => {
+  const { patches } = await setup(page, { ...ROW, images: [PHOTO, `${PHOTO}#2`, `${PHOTO}#3`] });
+  await page.goto(`${overviewUrl}/photos`);
+  await page.getByRole('button', { name: 'Remove photo' }).first().tap();
+  await expect(page.getByText('(2/3)')).toBeVisible();
+  await save(page).tap();
+  await expect(page.getByText('Photos and description saved')).toBeVisible();
+  expect(patches).toEqual([{ business_description: ROW.business_description, images: [`${PHOTO}#2`, `${PHOTO}#3`] }]);
+  await page.waitForURL(`**${overviewUrl}`);
+  await expect(summary(page, 'photos')).toHaveText('2 photos · 10 words');
+});
+
+// ---- Payout wallet
+
+test('Payout wallet: at 360px the whole 56-character address wraps in the field', async ({ page }) => {
+  expect(WALLET).toHaveLength(56);
   await setup(page);
-  await page.goto(`/update-registration/${ID}`);
-  await expectStoredValues(page);
-  await tab(page, 'Owner').tap();
-  const owner = page.getByRole('tabpanel', { name: 'Owner' });
-  await expect(owner.getByText('Pi Network Username')).toBeVisible();
-  await expect(
-    owner.getByText(mockUser.username, { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole('textbox', { name: /username/i })).toHaveCount(0);
-});
-
-// ---- The Pi wallet address is shown in full (56 characters wrap; nothing is cut off)
-
-const FULL_WALLET = 'GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H';
-
-test('at 360px the whole 56-character address is visible, wrapping onto a second line', async ({
-  page,
-}) => {
-  expect(FULL_WALLET).toHaveLength(56);
-  await page.setViewportSize({ width: 360, height: 780 });
-  await setup(page, { ...ROW, pi_wallet_address: FULL_WALLET });
-  await page.goto(`/update-registration/${ID}`);
-  await tab(page, 'Details').tap();
+  await page.goto(overviewUrl);
+  await openSection(page, 'Payout wallet', 'wallet');
   const field = page.locator('#piWalletAddress');
-  await expect(field).toHaveValue(FULL_WALLET);
-  // Nothing scrolls inside the field, either way
+  await expect(field).toHaveValue(WALLET);
   const fit = await field.evaluate((el) => ({
     sideways: el.scrollWidth <= el.clientWidth,
     downwards: el.scrollHeight <= el.clientHeight + 1,
-    lines: Math.round(
-      el.clientHeight / parseFloat(getComputedStyle(el).lineHeight),
-    ),
+    lines: Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight)),
     font: getComputedStyle(el).fontFamily,
   }));
-  expect(fit.sideways).toBe(true);
-  expect(fit.downwards).toBe(true);
+  expect(fit).toMatchObject({ sideways: true, downwards: true, font: expect.stringMatching(/mono/i) });
   expect(fit.lines).toBeGreaterThanOrEqual(2);
-  expect(fit.font).toMatch(/mono/i);
-  const noSideways = await page.evaluate(
-    () => document.documentElement.scrollWidth <= window.innerWidth,
-  );
-  expect(noSideways).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test('Enter adds no new line, and a pasted address with spaces is saved without them', async ({
-  page,
-}) => {
-  const { patches } = await setup(page);
-  await page.goto(`/update-registration/${ID}`);
-  await tab(page, 'Details').tap();
+test('Payout wallet: a pasted address with spaces is saved without them, and only the wallet is sent', async ({ page }) => {
+  const { patches } = await setup(page, { ...ROW, pi_wallet_address: '' });
+  await page.goto(overviewUrl);
+  await expect(summary(page, 'wallet')).toHaveText('Not set');
+  await openSection(page, 'Payout wallet', 'wallet');
   const field = page.locator('#piWalletAddress');
   await field.click();
-  await page.keyboard.press('End');
-  await page.keyboard.press('Enter');
+  await page.keyboard.insertText(`${WALLET.slice(0, 20)} ${WALLET.slice(20, 40)}  ${WALLET.slice(40)}\n`);
   await expect(field).toHaveValue(WALLET);
+  await save(page).tap();
+  await expect(page.getByText('Payout wallet saved')).toBeVisible();
+  expect(patches).toEqual([{ pi_wallet_address: WALLET }]);
+  await page.waitForURL(`**${overviewUrl}`);
+  await expect(summary(page, 'wallet')).toHaveText('GBRP…OX2H');
+});
 
-  // As pasted from a wallet app: spaced groups and a trailing newline
-  await field.fill('');
-  await page.keyboard.insertText(
-    `${FULL_WALLET.slice(0, 20)} ${FULL_WALLET.slice(20, 40)}  ${FULL_WALLET.slice(40)}\n`,
-  );
-  await expect(field).toHaveValue(FULL_WALLET);
-  await submit(page);
-  await expect.poll(() => patches.length).toBe(1);
-  expect(patches[0]!['pi_wallet_address']).toBe(FULL_WALLET);
+// ---- Old links to a field
+
+for (const field of ['piWalletAddress', 'pi_wallet_address']) {
+  test(`?field=${field} opens the Payout wallet section, focused on the field`, async ({ page }) => {
+    await setup(page);
+    await page.goto(`${overviewUrl}?field=${field}`);
+    await page.waitForURL(`**${overviewUrl}/wallet`);
+    await expect(page.locator('#piWalletAddress')).toBeFocused();
+  });
+}
+
+test('?field=nonsense: the overview, unchanged', async ({ page }) => {
+  await setup(page);
+  await page.goto(`${overviewUrl}?field=nonsense`);
+  await expect(row(page, 'Hours')).toBeVisible();
+  expect(path(page)).toBe(overviewUrl);
+});
+
+// ---- Loaded without a section's column: that section isn't saved
+
+test('a business loaded without its hours: saving Hours sends nothing and says so', async ({ page }) => {
+  const { hours: _h, ...partial } = ROW;
+  const { patches } = await setup(page, partial);
+  await page.goto(`${overviewUrl}/hours`);
+  await save(page).tap();
+  await expect(page.getByText("Some details couldn't be loaded", { exact: false }).first()).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(patches).toEqual([]);
 });

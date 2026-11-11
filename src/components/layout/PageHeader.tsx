@@ -42,7 +42,7 @@ const PageHeader = ({
     if (isIndexPage) return null; // No title for homepage
     if (isAnalyticsPage) return "Business Analytics";
     if (isRegistrationPage) return "Register Business";
-    if (isUpdateRegistrationPage) return "Update Business";
+    if (isUpdateRegistrationPage) return "Edit listing";
     if (isVerificationInfoPage) return "Verification & Certification";
 
     // Default titles for other routes

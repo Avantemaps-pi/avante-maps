@@ -33,7 +33,8 @@ import { Route as RecommendationsPlaceIdRouteImport } from './routes/recommendat
 import { Route as ReviewIndexRouteImport } from './routes/review/index'
 import { Route as ReviewBusinessIdRouteImport } from './routes/review/$businessId'
 import { Route as UpdateRegistrationIndexRouteImport } from './routes/update-registration/index'
-import { Route as UpdateRegistrationBusinessIdRouteImport } from './routes/update-registration/$businessId'
+import { Route as UpdateRegistrationBusinessIdIndexRouteImport } from './routes/update-registration/$businessId/index'
+import { Route as UpdateRegistrationBusinessIdSectionRouteImport } from './routes/update-registration/$businessId/$section'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -155,10 +156,16 @@ const UpdateRegistrationIndexRoute = UpdateRegistrationIndexRouteImport.update({
   path: '/update-registration/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const UpdateRegistrationBusinessIdRoute =
-  UpdateRegistrationBusinessIdRouteImport.update({
-    id: '/update-registration/$businessId',
-    path: '/update-registration/$businessId',
+const UpdateRegistrationBusinessIdIndexRoute =
+  UpdateRegistrationBusinessIdIndexRouteImport.update({
+    id: '/update-registration/$businessId/',
+    path: '/update-registration/$businessId/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const UpdateRegistrationBusinessIdSectionRoute =
+  UpdateRegistrationBusinessIdSectionRouteImport.update({
+    id: '/update-registration/$businessId/$section',
+    path: '/update-registration/$businessId/$section',
     getParentRoute: () => rootRouteImport,
   } as any)
 
@@ -184,10 +191,11 @@ export interface FileRoutesByFullPath {
   '/wallet': typeof WalletRoute
   '/recommendations/$placeId': typeof RecommendationsPlaceIdRoute
   '/review/$businessId': typeof ReviewBusinessIdRoute
-  '/update-registration/$businessId': typeof UpdateRegistrationBusinessIdRoute
   '/recommendations/': typeof RecommendationsIndexRoute
   '/review/': typeof ReviewIndexRoute
   '/update-registration/': typeof UpdateRegistrationIndexRoute
+  '/update-registration/$businessId/$section': typeof UpdateRegistrationBusinessIdSectionRoute
+  '/update-registration/$businessId/': typeof UpdateRegistrationBusinessIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -211,10 +219,11 @@ export interface FileRoutesByTo {
   '/wallet': typeof WalletRoute
   '/recommendations/$placeId': typeof RecommendationsPlaceIdRoute
   '/review/$businessId': typeof ReviewBusinessIdRoute
-  '/update-registration/$businessId': typeof UpdateRegistrationBusinessIdRoute
   '/recommendations': typeof RecommendationsIndexRoute
   '/review': typeof ReviewIndexRoute
   '/update-registration': typeof UpdateRegistrationIndexRoute
+  '/update-registration/$businessId/$section': typeof UpdateRegistrationBusinessIdSectionRoute
+  '/update-registration/$businessId': typeof UpdateRegistrationBusinessIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -239,10 +248,11 @@ export interface FileRoutesById {
   '/wallet': typeof WalletRoute
   '/recommendations/$placeId': typeof RecommendationsPlaceIdRoute
   '/review/$businessId': typeof ReviewBusinessIdRoute
-  '/update-registration/$businessId': typeof UpdateRegistrationBusinessIdRoute
   '/recommendations/': typeof RecommendationsIndexRoute
   '/review/': typeof ReviewIndexRoute
   '/update-registration/': typeof UpdateRegistrationIndexRoute
+  '/update-registration/$businessId/$section': typeof UpdateRegistrationBusinessIdSectionRoute
+  '/update-registration/$businessId/': typeof UpdateRegistrationBusinessIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -268,10 +278,11 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/recommendations/$placeId'
     | '/review/$businessId'
-    | '/update-registration/$businessId'
     | '/recommendations/'
     | '/review/'
     | '/update-registration/'
+    | '/update-registration/$businessId/$section'
+    | '/update-registration/$businessId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -295,10 +306,11 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/recommendations/$placeId'
     | '/review/$businessId'
-    | '/update-registration/$businessId'
     | '/recommendations'
     | '/review'
     | '/update-registration'
+    | '/update-registration/$businessId/$section'
+    | '/update-registration/$businessId'
   id:
     | '__root__'
     | '/'
@@ -322,10 +334,11 @@ export interface FileRouteTypes {
     | '/wallet'
     | '/recommendations/$placeId'
     | '/review/$businessId'
-    | '/update-registration/$businessId'
     | '/recommendations/'
     | '/review/'
     | '/update-registration/'
+    | '/update-registration/$businessId/$section'
+    | '/update-registration/$businessId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -350,10 +363,11 @@ export interface RootRouteChildren {
   WalletRoute: typeof WalletRoute
   RecommendationsPlaceIdRoute: typeof RecommendationsPlaceIdRoute
   ReviewBusinessIdRoute: typeof ReviewBusinessIdRoute
-  UpdateRegistrationBusinessIdRoute: typeof UpdateRegistrationBusinessIdRoute
   RecommendationsIndexRoute: typeof RecommendationsIndexRoute
   ReviewIndexRoute: typeof ReviewIndexRoute
   UpdateRegistrationIndexRoute: typeof UpdateRegistrationIndexRoute
+  UpdateRegistrationBusinessIdSectionRoute: typeof UpdateRegistrationBusinessIdSectionRoute
+  UpdateRegistrationBusinessIdIndexRoute: typeof UpdateRegistrationBusinessIdIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -526,11 +540,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UpdateRegistrationIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/update-registration/$businessId': {
-      id: '/update-registration/$businessId'
+    '/update-registration/$businessId/': {
+      id: '/update-registration/$businessId/'
       path: '/update-registration/$businessId'
-      fullPath: '/update-registration/$businessId'
-      preLoaderRoute: typeof UpdateRegistrationBusinessIdRouteImport
+      fullPath: '/update-registration/$businessId/'
+      preLoaderRoute: typeof UpdateRegistrationBusinessIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/update-registration/$businessId/$section': {
+      id: '/update-registration/$businessId/$section'
+      path: '/update-registration/$businessId/$section'
+      fullPath: '/update-registration/$businessId/$section'
+      preLoaderRoute: typeof UpdateRegistrationBusinessIdSectionRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -558,10 +579,13 @@ const rootRouteChildren: RootRouteChildren = {
   WalletRoute: WalletRoute,
   RecommendationsPlaceIdRoute: RecommendationsPlaceIdRoute,
   ReviewBusinessIdRoute: ReviewBusinessIdRoute,
-  UpdateRegistrationBusinessIdRoute: UpdateRegistrationBusinessIdRoute,
   RecommendationsIndexRoute: RecommendationsIndexRoute,
   ReviewIndexRoute: ReviewIndexRoute,
   UpdateRegistrationIndexRoute: UpdateRegistrationIndexRoute,
+  UpdateRegistrationBusinessIdSectionRoute:
+    UpdateRegistrationBusinessIdSectionRoute,
+  UpdateRegistrationBusinessIdIndexRoute:
+    UpdateRegistrationBusinessIdIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
