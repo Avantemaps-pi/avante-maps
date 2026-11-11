@@ -2,7 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { corsHeaders } from '../_shared/cors.ts';
 import { z } from 'https://deno.land/x/zod@v3.22.4/mod.ts';
 import { AMOUNT_TOLERANCE, getExpectedPlanPi } from '../_shared/prices.ts';
-import { createPiPayments, type PiAppClient } from '../_shared/piPaymentsClient.ts';
+import { createPiPayments, piSaysAlready, type PiAppClient } from '../_shared/piPaymentsClient.ts';
 import {
   getOrCreateLifecycleId,
   makeLogger,
@@ -745,7 +745,8 @@ Deno.serve(async (req) => {
         status: completeResponse.status,
       });
 
-      const piAlreadyCompleted = !completeResponse.ok && !!completeResult.message?.includes('already completed');
+      // Pi says already_completed (in error / error_message, or message)
+      const piAlreadyCompleted = !completeResponse.ok && piSaysAlready(completeResult, 'completed');
 
       if (!completeResponse.ok && !piAlreadyCompleted) {
         await supabaseClient.from('payments').update({

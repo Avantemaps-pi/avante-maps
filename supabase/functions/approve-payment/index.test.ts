@@ -41,8 +41,13 @@ function setup(
     /** What Pi's /me answers (default: the owner, in this app) */
     me?: { uid?: string; username?: string };
     meStatus?: number;
+    /** Pi's answers to approve, one per call in order (then 200) */
+    approveAnswers?: { status: number; body: object }[];
+    /** Runs when Pi is asked to approve, before it answers (to interleave another request) */
+    onApprove?: () => Promise<void> | void;
   } = {},
 ) {
+  const approveAnswers = [...(options.approveAnswers ?? [])];
   const piCalls: string[] = [];
   const meAuth: (string | null)[] = [];
   const fake = installFakeSupabase({
@@ -76,6 +81,15 @@ function setup(
           });
       }
       if (action === 'cancel') return new Response('{}', { status: options.cancelStatus ?? 200 });
+      if (action === 'approve') {
+        const answerApprove = async () => {
+          await options.onApprove?.();
+          const answer = approveAnswers.shift();
+          if (!answer) return Response.json({ identifier: PAYMENT_ID });
+          return Response.json(answer.body, { status: answer.status });
+        };
+        return answerApprove();
+      }
       return Response.json({ identifier: PAYMENT_ID });
     },
   });
@@ -585,4 +599,144 @@ test('a stale mainnet row: cancelled at Pi with the mainnet key before approving
   } finally {
     two.restore();
   }
+});
+
+// ---- Pi says the payment is approved already (11 Nov: a duplicate approve cancelled a good payment)
+
+const PI_ALREADY_APPROVED = {
+  error: 'already_approved',
+  error_message: 'Current payment is already approved.',
+  payment: { identifier: PAYMENT_ID },
+};
+
+test("Pi's real already_approved answer (400, no message field): 200, row approved, not cancelled", async () => {
+  const { fake, row } = setup({
+    piAmount: 3,
+    approveAnswers: [{ status: 400, body: PI_ALREADY_APPROVED }],
+  });
+  const { status, json } = await call({ kind: 'wallet_topup' }, 3);
+  assertEquals(
+    [status, json.success, json.message],
+    [200, true, 'Payment was already approved'],
+  );
+  assertEquals(row()!['status'], {
+    approved: true,
+    verified: false,
+    completed: false,
+    cancelled: false,
+  });
+  fake.restore();
+});
+
+test('already approved, for a plan: the approved amount and plan are still stored', async () => {
+  const { fake, row } = setup({
+    piAmount: 65.19,
+    approveAnswers: [{ status: 400, body: PI_ALREADY_APPROVED }],
+  });
+  const { status } = await call(PLAN, 65.19);
+  assertEquals(status, 200);
+  assertEquals(row()!['approved_amount_pi'], 65.19);
+  assertEquals((row()!['status'] as Row)['cancelled'], false);
+  fake.restore();
+});
+
+// ---- Overlapping requests for one payment: a failed approve never cancels an approved row
+
+// Request A is waiting on Pi's approve while request B runs to the end; then Pi answers A
+function overlapping(
+  answers: { status: number; body: object }[],
+  piAmount = 3,
+) {
+  let second: Promise<{
+    status: number;
+    json: Record<string, unknown>;
+  }> | null = null;
+  const env = setup({
+    piAmount,
+    approveAnswers: answers,
+    onApprove: async () => {
+      if (second) return;
+      second = call({ kind: 'wallet_topup' }, piAmount);
+      await second;
+    },
+  });
+  return { ...env, second: () => second! };
+}
+
+test('two requests: Pi approves the first and says already_approved to the second: both 200, row approved', async () => {
+  const { fake, row, second } = overlapping([
+    { status: 200, body: { identifier: PAYMENT_ID } },
+    { status: 400, body: PI_ALREADY_APPROVED },
+  ]);
+  const first = await call({ kind: 'wallet_topup' }, 3);
+  const other = await second();
+  assertEquals([first.status, first.json.success], [200, true]);
+  assertEquals([other.status, other.json.success], [200, true]);
+  assertEquals(row()!['status'], {
+    approved: true,
+    verified: false,
+    completed: false,
+    cancelled: false,
+  });
+  fake.restore();
+});
+
+test('Pi 500 on approve after another request approved the row: the row stays approved, 200 from the row', async () => {
+  const { fake, row, second } = overlapping([
+    { status: 200, body: { identifier: PAYMENT_ID } },
+    { status: 500, body: { error: 'internal_error', error_message: 'boom' } },
+  ]);
+  const first = await call({ kind: 'wallet_topup' }, 3);
+  assertEquals((await second()).status, 200);
+  assertEquals(
+    [first.status, first.json.message],
+    [200, 'Payment was already approved'],
+  );
+  assertEquals(row()!['status'], {
+    approved: true,
+    verified: false,
+    completed: false,
+    cancelled: false,
+  });
+  fake.restore();
+});
+
+test('Pi 500 on approve after the row was completed meanwhile: the row stays completed, the completed answer', async () => {
+  let fakeRef: ReturnType<typeof setup>['fake'] | null = null;
+  const env = setup({
+    piAmount: 3,
+    approveAnswers: [{ status: 500, body: { error: 'internal_error' } }],
+    onApprove: () => {
+      const r = fakeRef!.tables['payments']!.find(
+        (p) => p['payment_id'] === PAYMENT_ID,
+      )!;
+      r['status'] = {
+        approved: true,
+        verified: true,
+        completed: true,
+        cancelled: false,
+      };
+      r['txid'] = 'tx_done';
+    },
+  });
+  fakeRef = env.fake;
+  const { status, json } = await call({ kind: 'wallet_topup' }, 3);
+  assertEquals(
+    [status, json.message, json.txid],
+    [200, 'Payment already completed', 'tx_done'],
+  );
+  assertEquals((env.row()!['status'] as Row)['completed'], true);
+  assertEquals((env.row()!['status'] as Row)['cancelled'], false);
+  env.fake.restore();
+});
+
+test('Pi 500 on approve with no other request: still cancelled and 502, as before', async () => {
+  const { fake, row } = setup({
+    piAmount: 3,
+    approveAnswers: [{ status: 500, body: { error: 'internal_error' } }],
+  });
+  const { status } = await call({ kind: 'wallet_topup' }, 3);
+  assertEquals(status, 502);
+  assertEquals((row()!['status'] as Row)['cancelled'], true);
+  fake.restore();
 });

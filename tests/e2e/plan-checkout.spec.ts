@@ -41,6 +41,8 @@ async function setup(
     complete?: PayResponse;
     /** What payment-status reports while polling */
     rowStatus?: Record<string, unknown>;
+    /** How many times the mocked Pi SDK calls onReadyForServerApproval at once (default 1) */
+    approvalCalls?: number;
   } = {},
 ) {
   const payCalls: { body: Record<string, unknown>; headers: Record<string, string> }[] = [];
@@ -86,7 +88,7 @@ async function setup(
   });
   await page.addInitScript((s) => localStorage.setItem('supabase.auth.token', JSON.stringify(s)), session);
   await page.addInitScript(
-    ({ runCallbacks, approvalFails }) => {
+    ({ runCallbacks, approvalFails, approvalCalls }) => {
       const w = window as unknown as { Pi: object; __piInitialized: boolean; __piPayments: unknown[] };
       w.__piPayments = [];
       w.__piInitialized = true;
@@ -101,7 +103,10 @@ async function setup(
           w.__piPayments.push(data);
           if (!runCallbacks) return;
           void (async () => {
-            await callbacks.onReadyForServerApproval('pid-1');
+            const approvals = Array.from({ length: approvalCalls }, () =>
+              callbacks.onReadyForServerApproval('pid-1'),
+            );
+            await Promise.all(approvals);
             // A refused approval never reaches signing
             if (!approvalFails) await callbacks.onReadyForServerCompletion('pid-1', 'abc123');
           })();
@@ -111,6 +116,7 @@ async function setup(
     {
       runCallbacks: options.approve !== undefined || options.complete !== undefined,
       approvalFails: typeof options.approve === 'object' && options.approve.status !== 200,
+      approvalCalls: options.approvalCalls ?? 1,
     },
   );
   return { payCalls, balances, releasePay, approveCalls, completeCalls, price };
@@ -531,4 +537,23 @@ test('Pi never calls back: after 90 s the payment times out with the message, an
     page.getByText('The payment timed out. No Pi was taken. Please try again.'),
   ).toBeVisible();
   await expect(planButton(page)).toBeEnabled();
+});
+
+// 11 Nov: Pi called onReadyForServerApproval 3 times at once, and the overlapping approves cancelled
+// a good payment. One request per payment
+test('Pi calling onReadyForServerApproval 3 times at once: one approve-payment request for the plan', async ({
+  page,
+}) => {
+  const { approveCalls, completeCalls } = await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    complete: PIPELINE_OK,
+    approvalCalls: 3,
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  await expect.poll(() => completeCalls.length).toBe(1);
+  expect(approveCalls).toHaveLength(1);
 });

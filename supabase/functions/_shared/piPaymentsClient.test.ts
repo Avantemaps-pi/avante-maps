@@ -4,7 +4,7 @@
  *   docker run --rm -v "$PWD:/app" -w /app denoland/deno:2.1.4 deno test --no-lock --allow-env --allow-net --allow-read supabase/functions/_shared/piPaymentsClient.test.ts
  */
 import { assert, assertEquals } from 'jsr:@std/assert@1';
-import { createPiPayments } from './piPaymentsClient.ts';
+import { createPiPayments, piSaysAlready } from './piPaymentsClient.ts';
 
 const TESTNET_KEY = 'testnet-key-AAAA1111';
 const MAINNET_KEY = 'mainnet-key-BBBB2222';
@@ -295,4 +295,35 @@ test('no result or log line holds either key', async () => {
     assert(!text.includes(key), 'a key leaked');
     assert(!text.includes(key.slice(-8)), 'part of a key leaked');
   }
+});
+
+test("piSaysAlready: Pi's real already_approved body, and the other shapes", () => {
+  const real = {
+    error: 'already_approved',
+    error_message: 'Current payment is already approved.',
+  };
+  assert(piSaysAlready(real, 'approved'));
+  assert(
+    piSaysAlready({ error_message: 'Payment Already Approved' }, 'approved'),
+  );
+  assert(
+    piSaysAlready({ message: 'This payment was already approved' }, 'approved'),
+  );
+  assert(
+    piSaysAlready(
+      { error: 'already_completed', error_message: 'x' },
+      'completed',
+    ),
+  );
+  assert(
+    piSaysAlready(
+      { error_message: 'Current payment is already completed.' },
+      'completed',
+    ),
+  );
+  assert(!piSaysAlready(real, 'completed'));
+  assert(!piSaysAlready({ error: 'payment_not_found' }, 'approved'));
+  assert(!piSaysAlready({ error_message: 42 }, 'approved'));
+  assert(!piSaysAlready(null, 'approved'));
+  assert(!piSaysAlready('already approved', 'approved'));
 });

@@ -52,7 +52,8 @@ const session = {
 // __makeFakePi(label) makes a new, uninitialised, unauthenticated SDK object.
 // log.incomplete: a payment authenticate reports as unfinished. log.scopeErrorAfterApproval: the
 // payment fails with the scope error after its approval callback. log.mode 'silent': Pi never calls
-// back (as after "Payment Expired"); 'manual': the callbacks wait in log.callbacks for the test
+// back (as after "Payment Expired"); 'manual': the callbacks wait in log.callbacks for the test;
+// 'triple': onReadyForServerApproval fires 3 times in the same tick (as on 11 Nov), then completion
 const FAKE_SDK = `
 (function () {
   var NOT_INIT = ${JSON.stringify(NOT_INITIALIZED)};
@@ -93,6 +94,10 @@ const FAKE_SDK = `
         if (log.mode === 'manual') { log.callbacks = callbacks; return; }
         setTimeout(function () {
           callbacks.onReadyForServerApproval(id);
+          if (log.mode === 'triple') {
+            callbacks.onReadyForServerApproval(id);
+            callbacks.onReadyForServerApproval(id);
+          }
           setTimeout(function () {
             if (log.scopeErrorAfterApproval) callbacks.onError(new Error(NO_SCOPE));
             else callbacks.onReadyForServerCompletion(id, 'tx_' + id);
@@ -653,4 +658,66 @@ test('Pi asking for approval again after a refusal does not lock the dialog agai
     0,
   );
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+});
+
+// ---- One approve per payment (11 Nov: three at once, and the overlap cancelled a good payment)
+
+test('Pi calling onReadyForServerApproval 3 times at once: exactly one approve-payment request', async ({
+  page,
+}) => {
+  const calls = await setup(page);
+  await openWallet(page);
+  await setFake(page, { mode: 'triple' });
+  await topUp(page);
+  await expect(page.getByText(SUCCESS)).toBeVisible();
+  expect(calls.approve).toBe(1);
+  expect(calls.approveBodies[0]).toMatchObject({ paymentId: 'pay_1' });
+  expect(calls.complete).toHaveLength(1);
+});
+
+test('a replaced SDK object still gets one approve per payment', async ({
+  page,
+}) => {
+  const calls = await setup(page);
+  await openWallet(page);
+  await setFake(page, { mode: 'triple' });
+  await topUp(page);
+  await expect(page.getByText(SUCCESS)).toBeVisible();
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      Pi: unknown;
+      __makeFakePi: (l: string) => unknown;
+    };
+    w.Pi = w.__makeFakePi('replacement');
+  });
+  await topUp(page, '2');
+  await expect.poll(() => calls.complete.length).toBe(2);
+  expect(calls.approveBodies.map((b) => b.paymentId)).toEqual([
+    'pay_1',
+    'pay_2',
+  ]);
+  expect((await fakePi(page)).payments.map((p) => p.label)).toEqual([
+    'sdk-1',
+    'replacement',
+  ]);
+});
+
+test('an approve the server refuses is not reused: Pi asking again sends a new request', async ({
+  page,
+}) => {
+  const calls = await setup(page, {
+    approve: {
+      status: 502,
+      body: { success: false, message: 'Unable to verify payment' },
+    },
+  });
+  await openWallet(page);
+  await setFake(page, { mode: 'manual' });
+  await topUp(page);
+  await expect.poll(async () => (await fakePi(page)).payments.length).toBe(1);
+  await piCallsBack(page, 'onReadyForServerApproval', 'pay_1');
+  await expect.poll(() => calls.approve).toBe(1);
+  await expect(page.getByText('Unable to verify payment')).toBeVisible();
+  await piCallsBack(page, 'onReadyForServerApproval', 'pay_1');
+  await expect.poll(() => calls.approve).toBe(2);
 });

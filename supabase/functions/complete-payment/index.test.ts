@@ -40,6 +40,8 @@ interface SetupOptions {
   priceUsd?: number;
   rpcError?: string;
   piAlreadyCompleted?: boolean;
+  /** Pi's body when it says already completed (default: a message field) */
+  piAlreadyCompletedBody?: object;
   /** Who Pi says paid (default: the owner's Pi account) */
   piUserUid?: string | null;
   /** What Pi's /me answers (default: the owner, in this app) */
@@ -116,7 +118,11 @@ function setup(options: SetupOptions = {}) {
       }
       if (url.pathname.endsWith('/complete')) piCompletes.push(url.pathname);
       if (url.pathname.endsWith('/complete') && options.piAlreadyCompleted) {
-        return Response.json({ error: 'already_completed', message: 'This payment was already completed' }, { status: 400 });
+        const body = options.piAlreadyCompletedBody ?? {
+          error: 'already_completed',
+          message: 'This payment was already completed',
+        };
+        return Response.json(body, { status: 400 });
       }
       if (init?.method === 'GET' && piGetFailures > 0) {
         piGetFailures -= 1;
@@ -895,5 +901,40 @@ test('a mainnet completed row being recovered: re-read with the mainnet key', as
   assertEquals(result.status, 200);
   assertEquals(piByApp, ['get:testnet', 'get:mainnet']);
   assertEquals(rpcCalls.length, 1);
+  fake.restore();
+});
+
+// ---- Pi's own shape for "already completed": error / error_message, no message field
+
+test("Pi's already_completed body with error / error_message: a top up reaches the credit, once", async () => {
+  const { fake, ledger, row } = setup({
+    piAmount: 3,
+    piAlreadyCompleted: true,
+    piAlreadyCompletedBody: {
+      error: 'already_completed',
+      error_message: 'Current payment is already completed.',
+    },
+    rows: [topUpRow()],
+  });
+  const first = await call(TOPUP);
+  assertEquals([first.status, first.json.newBalance], [200, 3]);
+  assertEquals((row()!['status'] as Row)['cancelled'], false);
+  const again = await call(TOPUP);
+  assertEquals(again.status, 200);
+  assertEquals(ledger().length, 1);
+  fake.restore();
+});
+
+test('only error_message saying it (no code): recognised too', async () => {
+  const { fake, ledger } = setup({
+    piAmount: 3,
+    piAlreadyCompleted: true,
+    piAlreadyCompletedBody: {
+      error_message: 'This payment is Already Completed',
+    },
+    rows: [topUpRow()],
+  });
+  assertEquals((await call(TOPUP)).status, 200);
+  assertEquals(ledger().length, 1);
   fake.restore();
 });

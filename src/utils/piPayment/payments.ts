@@ -28,6 +28,32 @@ let paymentInProgress = false;
 // top-up are distinct flows and shouldn't block one another.
 let walletTopUpInProgress = false;
 
+// One approve-payment request per payment at a time. Pi can call onReadyForServerApproval again
+// for the same payment (it retries about every 10 s, and on 11 Nov called it 3 times at once,
+// and the overlapping requests cancelled a good payment). A running or successful approve is
+// reused; a failed one is forgotten, so Pi's next call can try again
+const approvals = new Map<string, ReturnType<typeof approvePayment>>();
+
+function approveOnce(
+  ...args: Parameters<typeof approvePayment>
+): ReturnType<typeof approvePayment> {
+  const paymentId = args[0].paymentId;
+  const running = approvals.get(paymentId);
+  if (running) return running;
+  const approval = approvePayment(...args).then(
+    (result) => {
+      if (!result.success) approvals.delete(paymentId);
+      return result;
+    },
+    (error: unknown) => {
+      approvals.delete(paymentId);
+      throw error;
+    },
+  );
+  approvals.set(paymentId, approval);
+  return approval;
+}
+
 export interface PaymentResult {
   success: boolean;
   message: string;
@@ -238,7 +264,7 @@ async function runSubscriptionPayment(
           lcEmit('info', `${FN_LC}.approve.start`, 'pi_api', { paymentId });
           try {
             hooks?.onPaymentId?.(paymentId);
-            const approvalResult = await approvePayment(
+            const approvalResult = await approveOnce(
               { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, piAccessToken: getPiAccessToken() },
               { lifecycleId }
             );
@@ -471,7 +497,7 @@ async function runWalletTopUp(
           lcEmit('info', `${FN_LC}.approve.start`, 'pi_api', { paymentId });
           try {
             hooks?.onPaymentId?.(paymentId);
-            const approvalResult = await approvePayment(
+            const approvalResult = await approveOnce(
               { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, piAccessToken: getPiAccessToken() },
               { lifecycleId }
             );
