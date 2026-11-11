@@ -123,7 +123,7 @@ export function useSearchParams(): [URLSearchParams, (init: URLSearchParams | Re
 
 // ---------- Link ----------
 
-type LinkProps = Omit<ComponentProps<typeof TSLink>, "to"> & {
+type LinkProps = Omit<ComponentProps<typeof TSLink>, "to" | "state"> & {
   to: string;
   replace?: boolean;
   state?: unknown;
@@ -165,3 +165,8 @@ export const Outlet = TSOutlet;
 // ---------- NavLink (minimal) ----------
 
 export const NavLink = Link;
+
+// ---------- useBlocker (TanStack's own: blocks in-app navigation and browser Back) ----------
+
+// eslint-disable-next-line react-refresh/only-export-components
+export { useBlocker } from "@tanstack/react-router";

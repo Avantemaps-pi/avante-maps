@@ -1,123 +1,64 @@
 
-import React, { useEffect, useState, useRef } from 'react';
-import { useLocation, useNavigate, useParams } from '@/lib/router-compat';
-import { Loader2 } from 'lucide-react';
+import React, { useEffect } from 'react';
+import { useNavigate, useParams, useSearchParams } from '@/lib/router-compat';
 import { motion } from '@/components/ui/motion';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { BusinessUpdateForm, BusinessUpdateFormRef } from '@/components/business/BusinessUpdateForm';
-import { Business } from '@/types/business';
-import { toast } from 'sonner';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/context/auth';
-import { getSessionUserId } from '@/lib/sessionUserId';
-import { secureLog } from '@/utils/secureLogger';
-import { OWNED_BUSINESS_COLUMNS, isBusinessComplete, toOwnedBusiness, type OwnedBusinessRow } from '@/utils/ownedBusiness';
+import { hasInAppHistory } from '@/lib/inAppHistory';
+import { useOwnedBusiness } from '@/hooks/useOwnedBusiness';
+import EditListingOverview, { EditListingOverviewSkeleton } from '@/components/business/edit/EditListingOverview';
+import { sectionForField } from '@/components/business/edit/listingSections';
 import AppLayout from '@/components/layout/AppLayout';
 
+// Edit listing: the overview of a business's sections. Each section opens on its own screen
 const UpdateRegistration = () => {
-  const location = useLocation();
   const navigate = useNavigate();
   const { businessId } = useParams();
-  const { user, isLoading: authLoading } = useAuth();
+  const [searchParams] = useSearchParams();
   const isMobile = useIsMobile();
-  const [isLoading, setIsLoading] = useState(true);
-  const [business, setBusiness] = useState<Business | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const businessUpdateFormRef = useRef<BusinessUpdateFormRef>(null);
-  
+  const { business, isLoading, error } = useOwnedBusiness(businessId);
+
+  // An old link to a field (?field=piWalletAddress, or a notification's ?field=pi_wallet_address)
+  // opens that field's section instead, focused on it. Back from there skips this overview
+  const linkedField = searchParams.get('field');
+  const linkedSection = sectionForField(linkedField);
   useEffect(() => {
-    if (business) return;
-    const stateBusiness = (location.state as { business?: Business } | null)?.business;
-    const routeId = businessId && /^\d+$/.test(businessId) ? Number(businessId) : null;
+    if (!linkedSection || !businessId) return;
+    navigate(`/update-registration/${businessId}/${linkedSection}`, {
+      replace: true,
+      state: { focusField: linkedSection === 'wallet' ? 'piWalletAddress' : linkedField },
+    });
+  }, [linkedSection, linkedField, businessId, navigate]);
 
-    // From Your businesses, when it brought everything the form saves back
-    if (stateBusiness && isBusinessComplete(stateBusiness) && (routeId === null || stateBusiness.id === routeId)) {
-      setBusiness(stateBusiness);
-      setIsLoading(false);
-      return;
-    }
-    if (routeId === null) {
-      setLoadError('No business data found. Please select a business to edit.');
-      setIsLoading(false);
-      return;
-    }
-
-    // A direct load or reload, or incomplete data: load it by the route's id
-    let cancelled = false;
-    (async () => {
-      const sessionUserId = await getSessionUserId();
-      if (cancelled) return;
-      if (!sessionUserId) {
-        // The session may still be restoring; this runs again when it settles
-        if (authLoading) return;
-        setLoadError('Please log in to edit your business.');
-        setIsLoading(false);
-        return;
-      }
-      setLoadError(null);
-      const { data, error } = await supabase
-        .from('businesses')
-        .select(OWNED_BUSINESS_COLUMNS)
-        .eq('id', routeId)
-        .eq('owner_id', sessionUserId)
-        .maybeSingle();
-      if (cancelled) return;
-      if (error) {
-        secureLog.error('Error loading business to edit', { error });
-        setLoadError('Failed to load business information. Please try again.');
-      } else if (!data) {
-        setLoadError("We couldn't find this business on your account.");
-      } else {
-        setBusiness(toOwnedBusiness(data as OwnedBusinessRow));
-      }
-      setIsLoading(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [business, businessId, location.state, authLoading, user?.uid]);
-
+  // Back, or to the list when there's no earlier page in the app (a direct load or a link)
   const handleGoBack = () => {
-    if (businessUpdateFormRef.current) {
-      businessUpdateFormRef.current.checkAndHandleBackNavigation();
+    if (hasInAppHistory()) {
+      navigate(-1);
     } else {
-      navigate('/registered-business');
+      navigate('/registered-business', { replace: true });
     }
   };
 
-  const handleSuccess = () => {
-    toast.success('Business information updated successfully!');
-    navigate('/registered-business');
-  };
-  
   return (
-    <AppLayout 
-      title="Update Business" 
+    <AppLayout
+      title="Edit listing"
       backButton={true}
       hideBottomNav={true}
       onBackClick={handleGoBack}
     >
-      <motion.div 
-        className="w-full max-w-5xl mx-auto"
+      <motion.div
+        className="w-full max-w-2xl mx-auto px-4"
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
         skipMobileAnimations={isMobile}
       >
-        {isLoading ? (
-          <div className="flex justify-center items-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            <span className="ml-2 text-muted-foreground">Loading business information...</span>
-          </div>
+        {isLoading || linkedSection ? (
+          <EditListingOverviewSkeleton />
         ) : business ? (
-          <BusinessUpdateForm 
-            ref={businessUpdateFormRef}
-            business={business} 
-            onSuccess={handleSuccess}
-          />
+          <EditListingOverview business={business} />
         ) : (
           <div className="bg-destructive/10 border border-destructive/30 text-foreground p-4 rounded-md">
-            {loadError ?? 'Failed to load business information. Please try again.'}
+            {error ?? 'Failed to load business information. Please try again.'}
           </div>
         )}
       </motion.div>

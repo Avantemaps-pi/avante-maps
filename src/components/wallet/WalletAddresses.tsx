@@ -120,7 +120,8 @@ const WalletAddresses: React.FC = () => {
               </div>
               {payoutWallet && <CopyButton address={payoutWallet} label={`Copy the ${name} payout wallet address`} />}
               <Link
-                to={`/update-registration/${business.id}?field=piWalletAddress`}
+                to={`/update-registration/${business.id}/wallet`}
+                state={{ focusField: 'piWalletAddress' }}
                 aria-label={payoutWallet ? `Edit the ${name} payout wallet` : `Add a payout wallet for ${name}`}
                 className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-md px-1.5 text-sm font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
