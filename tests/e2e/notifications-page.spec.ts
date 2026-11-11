@@ -521,7 +521,7 @@ test('a tab with nothing in it shows its empty state while the others have rows'
   await expect(page.locator('[data-notification-row]')).toHaveCount(0);
 });
 
-test('tapping a row opens its link, marks it read and records the click', async ({
+test('tapping a row marks it read and stays on the page; only the action link opens it', async ({
   page,
 }) => {
   const { patches, tracked } = await setup(page, allKindRows());
@@ -529,22 +529,21 @@ test('tapping a row opens its link, marks it read and records the click', async 
   await row(page, 'new_message')
     .getByText('Are you open on Sunday afternoon?', { exact: false })
     .tap();
-  await page.waitForURL('**/communicon');
-  expect(
-    patches.some(
-      (p) => p.query.includes('n-new_message') && p.body['read'] === true,
-    ),
-  ).toBe(true);
   await expect
-    .poll(() => tracked.find((t) => t['event_type'] === 'clicked'))
-    .toEqual({
-      // No click_url: the row already has it, and track-notification would overwrite it
-      notification_id: 'n-new_message',
-      event_type: 'clicked',
-    });
+    .poll(() =>
+      patches.some(
+        (p) => p.query.includes('n-new_message') && p.body['read'] === true,
+      ),
+    )
+    .toBe(true);
+  await expect(page).toHaveURL(/\/notifications$/);
+  // Read is recorded, but not a click: nothing was opened
+  expect(tracked.filter((t) => t['event_type'] === 'clicked')).toEqual([]);
 });
 
-test('the action link does the same', async ({ page }) => {
+test('the action link opens it, marks it read and records the click', async ({
+  page,
+}) => {
   const { patches, tracked } = await setup(page, allKindRows());
   await open(page);
   await row(page, 'plan_ending')
@@ -557,8 +556,13 @@ test('the action link does the same', async ({ page }) => {
     ),
   ).toBe(true);
   await expect
-    .poll(() => tracked.filter((t) => t['event_type'] === 'clicked').length)
-    .toBe(1);
+    .poll(() => tracked.find((t) => t['event_type'] === 'clicked'))
+    .toEqual({
+      // No click_url: the row already has it, and track-notification would overwrite it
+      notification_id: 'n-plan_ending',
+      event_type: 'clicked',
+    });
+  expect(tracked.filter((t) => t['event_type'] === 'clicked')).toHaveLength(1);
 });
 
 test('a click_url that is not an in-app path gets no action link, and tapping the row only marks it read', async ({
@@ -647,7 +651,6 @@ test('reading a notification lowers the counts; at 0 the chip goes and the name 
   await open(page);
   await expect(chip(page, 'All')).toHaveText('2');
   await row(page, 'new_message').tap();
-  await page.goBack();
   await expect(chip(page, 'All')).toHaveText('1');
   await expect(chip(page, 'Account')).toHaveText('1');
   await expect(chip(page, 'Activity')).toHaveCount(0);
@@ -748,4 +751,130 @@ test('arrow keys still switch tabs with counts shown', async ({ page }) => {
   await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true');
   await page.keyboard.press('ArrowLeft');
   await expect(tab(page, 'Activity')).toHaveAttribute('aria-selected', 'true');
+});
+
+// ---- Rows open in place: a tap shows the whole message, only the action link navigates
+
+const LONG =
+  'Payment of 70.33 Pi received. Your Small Business plan is now active until 11 December, and your three listings stay visible on the map with verified badges, analytics and direct messages from customers in CommuniCon.';
+
+const longRow = (): Row => ({
+  ...unreadRow('plan_paid'),
+  id: 'n-long',
+  content: LONG,
+});
+
+const textOf = (page: Page, kind: string) =>
+  row(page, kind).locator('[data-notification-text]');
+const chevron = (page: Page, kind: string) =>
+  row(page, kind).locator('[data-notification-expand]');
+
+test('a long notice is clamped to 2 lines; a tap expands it, marks it read and stays; another tap collapses it', async ({
+  page,
+}) => {
+  const { patches } = await setup(page, [longRow()]);
+  await open(page);
+  const text = textOf(page, 'plan_paid');
+  const clamped = await text.evaluate(
+    (el) => el.getBoundingClientRect().height,
+  );
+  expect(clamped).toBeLessThanOrEqual(41);
+  await expect(chevron(page, 'plan_paid')).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+
+  await text.tap();
+  await expect(chevron(page, 'plan_paid')).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  await expect
+    .poll(() => text.evaluate((el) => el.getBoundingClientRect().height))
+    .toBeGreaterThan(60);
+  await expect(page).toHaveURL(/\/notifications$/);
+  await expect
+    .poll(() =>
+      patches.some(
+        (p) => p.query.includes('n-long') && p.body['read'] === true,
+      ),
+    )
+    .toBe(true);
+  // The whole message is shown, once the height transition ends
+  await expect
+    .poll(() => text.evaluate((el) => el.scrollHeight <= el.clientHeight + 1))
+    .toBe(true);
+
+  await text.tap();
+  await expect(chevron(page, 'plan_paid')).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await expect
+    .poll(() => text.evaluate((el) => el.getBoundingClientRect().height))
+    .toBeLessThanOrEqual(41);
+});
+
+test('a short notice has no chevron, and a tap only marks it read', async ({
+  page,
+}) => {
+  const { patches } = await setup(page, [unreadRow('verified')]);
+  await open(page);
+  await expect(row(page, 'verified')).toBeVisible();
+  await expect(chevron(page, 'verified')).toHaveCount(0);
+  await textOf(page, 'verified').tap();
+  await expect
+    .poll(() => patches.some((p) => p.query.includes('n-verified')))
+    .toBe(true);
+  await expect(page).toHaveURL(/\/notifications$/);
+});
+
+test('the chevron is a button: Enter and Space open and close it; each row opens on its own', async ({
+  page,
+}) => {
+  await setup(page, [
+    longRow(),
+    {
+      ...longRow(),
+      id: 'n-long-2',
+      metadata: { ...longRow().metadata, kind: 'topup_received' },
+    },
+  ]);
+  await open(page);
+  const first = chevron(page, 'plan_paid');
+  await first.focus();
+  await page.keyboard.press('Enter');
+  await expect(first).toHaveAttribute('aria-expanded', 'true');
+  await expect(chevron(page, 'topup_received')).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await page.keyboard.press('Space');
+  await expect(first).toHaveAttribute('aria-expanded', 'false');
+  await expect(first).toHaveAccessibleName('Show the full message');
+});
+
+test('the action link of a long notice still navigates', async ({ page }) => {
+  await setup(page, [longRow()]);
+  await open(page);
+  await row(page, 'plan_paid').getByRole('link', { name: 'View plan' }).tap();
+  await page.waitForURL('**/wallet');
+});
+
+test('a narrower screen can make a notice expandable: measured again on resize', async ({
+  page,
+}) => {
+  const medium = {
+    ...unreadRow('plan_paid'),
+    id: 'n-medium',
+    content:
+      'Your Small Business plan is active. 70.33 π was paid from your Avante Maps balance.',
+  };
+  await page.setViewportSize({ width: 768, height: 800 });
+  await setup(page, [medium]);
+  await open(page);
+  await expect(row(page, 'plan_paid')).toBeVisible();
+  await expect(chevron(page, 'plan_paid')).toHaveCount(0);
+  await page.setViewportSize({ width: 280, height: 800 });
+  await expect(chevron(page, 'plan_paid')).toHaveCount(1);
 });

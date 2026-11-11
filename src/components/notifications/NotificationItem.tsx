@@ -1,9 +1,9 @@
-import React, { useState, useRef } from 'react';
-import { Check } from 'lucide-react';
+import React, { useState, useRef, useLayoutEffect } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
 import { NotificationProps } from '@/types/notification';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useSwipeable } from 'react-swipeable';
-import { Link, useNavigate } from '@/lib/router-compat';
+import { Link } from '@/lib/router-compat';
 import { cn } from '@/lib/utils';
 import {
   getKindConfig,
@@ -63,8 +63,12 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   selectionMode = false
 }) => {
   const { content, time, read, id } = notification;
-  const navigate = useNavigate();
   const [swipeOffset, setSwipeOffset] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  // Whether the text is longer than its two collapsed lines, measured after render and on resize
+  const [canExpand, setCanExpand] = useState(false);
+  const [fullHeight, setFullHeight] = useState(0);
+  const textRef = useRef<HTMLParagraphElement>(null);
   const [isSwiping, setIsSwiping] = useState(false);
   const hasVibratedRef = useRef(false);
 
@@ -76,6 +80,28 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   const linked = getNotificationAction(notification);
   const action = linked && isInAppPath(linked.url) ? linked : null;
   const emailed = wasAlsoEmailed(notification);
+
+  useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    const measure = () => {
+      // scrollHeight is the whole text's height, clamped or not
+      const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
+      setFullHeight(el.scrollHeight);
+      setCanExpand(el.scrollHeight > lineHeight * 2 + 1);
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [content]);
 
   const triggerHapticFeedback = () => {
     if ('vibrate' in navigator && !hasVibratedRef.current) {
@@ -90,6 +116,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     if (action) onOpenNotification?.(id);
   };
 
+  // A tap marks it read and opens or closes the full text in place. Only the action link navigates
   const handleClick = () => {
     if (isSwiping) return;
 
@@ -97,8 +124,13 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
       onToggleSelection(id);
       return;
     }
-    recordOpen();
-    if (action) navigate(action.url);
+    if (!read) onReadNotification(id);
+    if (canExpand) setExpanded((open) => !open);
+  };
+
+  const handleChevronClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    handleClick();
   };
 
   const handleActionClick = (e: React.MouseEvent) => {
@@ -211,7 +243,21 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
           </span>
 
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <p className="text-sm leading-5 text-foreground break-words">
+            <p
+              ref={textRef}
+              id={`notification-text-${id}`}
+              data-notification-text
+              data-expanded={expanded ? 'true' : undefined}
+              style={
+                canExpand
+                  ? { maxHeight: expanded ? fullHeight : 40 }
+                  : undefined
+              }
+              className={cn(
+                'overflow-hidden text-sm leading-5 text-foreground break-words transition-[max-height] duration-200 ease-out motion-reduce:transition-none',
+                !expanded && 'line-clamp-2',
+              )}
+            >
               <NotificationText content={content} name={name} />
             </p>
             <p className="text-xs text-muted-foreground">
@@ -225,10 +271,36 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
             )}
           </div>
 
-          {!read && !selectionMode && (
-            <span data-unread-dot className="relative mt-2 h-2 w-2 shrink-0 rounded-full bg-primary">
-              <span className="sr-only">Unread</span>
-            </span>
+          {!selectionMode && (!read || canExpand) && (
+            <div className="flex h-6 shrink-0 items-center gap-1">
+              {!read && (
+                <span
+                  data-unread-dot
+                  className="relative h-2 w-2 shrink-0 rounded-full bg-primary"
+                >
+                  <span className="sr-only">Unread</span>
+                </span>
+              )}
+              {canExpand && (
+                <button
+                  type="button"
+                  data-notification-expand
+                  aria-expanded={expanded}
+                  aria-controls={`notification-text-${id}`}
+                  aria-label={expanded ? 'Show less' : 'Show the full message'}
+                  onClick={handleChevronClick}
+                  className="-my-1.5 -mr-2 flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <ChevronDown
+                    className={cn(
+                      'h-4 w-4 transition-transform duration-200 motion-reduce:transition-none',
+                      expanded && 'rotate-180',
+                    )}
+                    aria-hidden="true"
+                  />
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
