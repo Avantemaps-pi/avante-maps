@@ -375,10 +375,19 @@ test('10 at most, merged across both sources', async ({ page }) => {
   await expect(activityRows(page).first()).toContainText('21 Oct');
 });
 
-test('Pending, for a payment that is approved or only just created', async ({ page }) => {
+test('Pending only once signed (a txid); approved or just created without one is "Not paid"', async ({
+  page,
+}) => {
   await setup(page, {
     payments: [
-      payment(1, '2026-11-02T09:00:00Z', 1, { kind: 'wallet_topup' }, { approved: true, verified: false, completed: false, cancelled: false }),
+      payment(
+        1,
+        '2026-11-02T09:00:00Z',
+        1,
+        { kind: 'wallet_topup' },
+        { approved: true, verified: false, completed: false, cancelled: false },
+        { txid: 'tx_signed' },
+      ),
       payment(2, '2026-11-01T09:00:00Z', 1, { kind: 'wallet_topup' }, { approved: false, verified: false, completed: false, cancelled: false }),
     ],
   });
@@ -387,7 +396,7 @@ test('Pending, for a payment that is approved or only just created', async ({ pa
     '2 Nov · 11:00 · Pending',
   );
   await expect(activityRows(page).nth(1)).toContainText(
-    '1 Nov · 11:00 · Pending',
+    '1 Nov · 11:00 · Not paid',
   );
 });
 
@@ -518,6 +527,8 @@ test('an error that was not cancelled keeps its sign, in red', async ({
         8,
         { subscriptionTier: 'organization' },
         { approved: true, completed: false, cancelled: false, error: 'boom' },
+        // Signed, so Pi may have moved
+        { txid: 'tx_signed' },
       ),
     ],
   });
@@ -591,6 +602,72 @@ test('cancelled, voided and expired payments read "Cancelled", muted, with no si
       muted,
     );
   }
+});
+
+// 13 Nov: three plan payments the wallet never signed ("not enough funds") read
+// "− 142.05 π · Pending", as if the Pi had left
+test('approved but never signed: "Not paid", muted, with no minus sign', async ({
+  page,
+}) => {
+  await setup(page, {
+    payments: [
+      payment(
+        1,
+        '2026-11-13T00:05:00Z',
+        142.05,
+        { subscriptionTier: 'organization', frequency: 'monthly' },
+        { approved: true, verified: false, completed: false, cancelled: false },
+        { approved_amount_pi: 142.05, txid: null },
+      ),
+    ],
+  });
+  await page.goto('/wallet');
+  const row = activityRows(page).first();
+  await expect(row).toContainText('Organization plan');
+  await expect(row).toContainText('Not paid');
+  await expect(row).not.toContainText('Pending');
+  await expect(row).not.toContainText('−');
+  const muted = await row
+    .getByText('Not paid', { exact: true })
+    .evaluate((el) => getComputedStyle(el).color);
+  await expect(row.getByText('142.05 π', { exact: true })).toHaveCSS(
+    'color',
+    muted,
+  );
+});
+
+test('a completed plan paid with Pi: "− 142.05 π" and Completed; cancelled for not signing: "Cancelled", no sign', async ({
+  page,
+}) => {
+  await setup(page, {
+    payments: [
+      payment(
+        1,
+        '2026-11-13T00:28:00Z',
+        142.05,
+        { subscriptionTier: 'organization', frequency: 'monthly' },
+        COMPLETED,
+        { approved_amount_pi: 142.05, txid: 'tx_paid' },
+      ),
+      payment(
+        2,
+        '2026-11-13T00:20:00Z',
+        142.05,
+        { subscriptionTier: 'organization', frequency: 'monthly' },
+        { ...CANCELLED, error: 'Cancelled: not signed in the Pi wallet' },
+        { approved_amount_pi: 142.05 },
+      ),
+    ],
+  });
+  await page.goto('/wallet');
+  const paid = activityRows(page).nth(0);
+  await expect(paid).toContainText('Completed');
+  await expect(paid.getByText('− 142.05 π', { exact: true })).toBeVisible();
+  const cancelled = activityRows(page).nth(1);
+  await expect(cancelled.getByText('Cancelled', { exact: true })).toBeVisible();
+  await expect(cancelled).not.toContainText('not signed');
+  await expect(cancelled).not.toContainText('−');
+  await expect(cancelled.getByText('142.05 π', { exact: true })).toBeVisible();
 });
 
 // ---- Abandoned payments are tidied when the Wallet opens (#174)

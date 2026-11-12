@@ -35,6 +35,7 @@ interface PaymentRow {
   memo: string | null;
   status: PaymentStatusJson | null;
   metadata: PaymentMetadata | null;
+  txid: string | null;
   created_at: string | null;
 }
 
@@ -77,7 +78,7 @@ const sortTime = (ts: string | null) => {
   return Number.isNaN(time) ? 0 : time;
 };
 
-function deriveStatus(status: PaymentStatusJson | null): { label: string; bad: boolean; moneyFailed: boolean; cancelled: boolean; needsSupport: boolean } {
+function deriveStatus(status: PaymentStatusJson | null, txid: string | null): { label: string; bad: boolean; moneyFailed: boolean; cancelled: boolean; needsSupport: boolean } {
   const settled = { moneyFailed: false, cancelled: false, needsSupport: false };
   const failed = (label: string) => ({ label, bad: true, moneyFailed: true, cancelled: false, needsSupport: false });
   // The Pi moved, so this one isn't a failed payment: its amount stays the normal colour
@@ -104,12 +105,17 @@ function deriveStatus(status: PaymentStatusJson | null): { label: string; bad: b
       cancelled: true,
     };
   }
+  // Never signed in the Pi Wallet (approved or not): no Pi can have moved, so it's muted and has no
+  // sign, like a cancelled one. Only the user's Send in the wallet moves Pi, and that gives a txid
+  if (!txid) {
+    return { label: 'Not paid', bad: false, ...settled, cancelled: true };
+  }
   if (status?.error) return failed('Error');
   return { label: 'Pending', bad: false, ...settled };
 }
 
 function paymentToItem(row: PaymentRow): ActivityItem {
-  const state = deriveStatus(row.status);
+  const state = deriveStatus(row.status, row.txid);
   const isTopUp = row.metadata?.kind === 'wallet_topup';
   const tier = row.metadata?.subscriptionTier;
   let label: string;
@@ -135,7 +141,7 @@ function paymentToItem(row: PaymentRow): ActivityItem {
     meta: [...(type ? [type] : []), formatDate(row.created_at)],
     status: state.label,
     statusIsBad: state.bad,
-    // A cancelled payment moved nothing, so it has no sign
+    // A cancelled or unsigned payment moved nothing, so it has no sign
     amount: state.cancelled ? `${amount} π` : `${isTopUp ? '+' : '−'} ${amount} π`,
     amountClass: state.cancelled ? 'text-muted-foreground' : state.moneyFailed ? 'text-destructive' : isTopUp ? 'text-primary' : 'text-foreground',
     needsSupport: state.needsSupport,
@@ -180,7 +186,7 @@ const fetchActivity = async (): Promise<ActivityItem[] | null> => {
   const [payments, ledger] = await Promise.all([
     supabase
       .from('payments')
-      .select('id, amount, approved_amount_pi, memo, status, metadata, created_at')
+      .select('id, amount, approved_amount_pi, memo, status, metadata, txid, created_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(PAGE_SIZE),
