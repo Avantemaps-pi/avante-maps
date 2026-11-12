@@ -39,7 +39,7 @@ I'm working on **Avante Maps** — a Pi Network-powered business directory web a
 |---|---|
 | Lovable project ID | `ad58478f-862b-4337-99c0-4bd1bc66d916` |
 | Lovable Dev branch | `Dev` (source of truth) |
-| GitHub repo | `https://github.com/Avantemaps-pi/avantemaps` (branch: `Dev`) |
+| GitHub repo | `https://github.com/Avantemaps-pi/avante-maps` (branch: `Dev`) |
 | Supabase project ID | `xvpwbocwasbtzrzrxyvu` |
 | Supabase URL | `https://xvpwbocwasbtzrzrxyvu.supabase.co` |
 | App domain | `avantemaps.com` |
@@ -123,7 +123,7 @@ Full reference: `claude/pi-payments-reference.md` in the claude.ai project. Dura
 
 ## Environment & Branch Workflow
 
-- **`Dev` is the source of truth branch** on both Lovable and GitHub (`Avantemaps-pi/avantemaps`, branch `Dev`).
+- **`Dev` is the source of truth branch** on both Lovable and GitHub (`Avantemaps-pi/avante-maps`, branch `Dev`).
 - **Do not commit directly to `Dev` for anything non-trivial.** Work on a feature branch cut from `Dev` (e.g. `fix/auth-mismatch`, `feat/business-analytics`) and open a PR back into `Dev` for review, unless I've explicitly told you a specific change is a direct-to-Dev hotfix.
 - Production deploys to `avantemaps.com` via Vercel are connected to this repo — confirm with me which branch is wired to the production Vercel deployment before assuming a merge to `Dev` auto-deploys.
 
