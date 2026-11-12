@@ -14,7 +14,6 @@ import {
   AlertTriangle,
   Scale,
   ChevronRight,
-  CreditCard,
   Shield,
   FileText,
   Cookie,
@@ -316,19 +315,19 @@ const Settings = () => {
               <div className="flex items-start gap-3 text-left">
                 <Scale className="h-5 w-5 mt-0.5 flex-shrink-0 text-primary" />
                 <div className="flex flex-col items-start">
-                  <span className="font-semibold text-base sm:text-lg">Legal &amp; About</span>
-                  <span className="text-xs sm:text-sm text-muted-foreground">App information and policies</span>
+                  <span className="font-semibold text-base sm:text-lg">Legal and help</span>
+                  <span className="text-xs sm:text-sm text-muted-foreground">Policies, and how to reach us</span>
                 </div>
               </div>
             </AccordionTrigger>
             <AccordionContent className="px-4 sm:px-6 pt-2 pb-4">
               <div className="space-y-1">
                 <Link
-                  to="/pricing"
+                  to="/terms"
                   className="flex items-center gap-3 px-3 py-3 rounded-md hover:bg-muted transition-colors text-sm"
                 >
-                  <CreditCard className="h-4 w-4 text-muted-foreground" />
-                  <span className="flex-1">Pricing</span>
+                  <FileText className="h-4 w-4 text-muted-foreground" />
+                  <span className="flex-1">Terms of Service</span>
                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
                 </Link>
                 <Link
@@ -340,14 +339,6 @@ const Settings = () => {
                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
                 </Link>
                 <Link
-                  to="/terms"
-                  className="flex items-center gap-3 px-3 py-3 rounded-md hover:bg-muted transition-colors text-sm"
-                >
-                  <FileText className="h-4 w-4 text-muted-foreground" />
-                  <span className="flex-1">Terms of Service</span>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </Link>
-                <Link
                   to="/cookies"
                   className="flex items-center gap-3 px-3 py-3 rounded-md hover:bg-muted transition-colors text-sm"
                 >
@@ -355,14 +346,14 @@ const Settings = () => {
                   <span className="flex-1">Cookie Policy</span>
                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
                 </Link>
-                <a
-                  href="mailto:support@avantemaps.com"
+                <Link
+                  to="/contact"
                   className="flex items-center gap-3 px-3 py-3 rounded-md hover:bg-muted transition-colors text-sm"
                 >
                   <Mail className="h-4 w-4 text-muted-foreground" />
-                  <span className="flex-1">Contact Us</span>
+                  <span className="flex-1">Contact us</span>
                   <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </a>
+                </Link>
               </div>
             </AccordionContent>
           </AccordionItem>

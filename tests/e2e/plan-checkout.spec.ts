@@ -626,10 +626,10 @@ test('after paying from the balance, the Wallet shows the reduced balance and th
   await expect(async () => {
     await page.getByRole('button', { name: 'Open menu' }).tap();
     await expect(
-      page.getByRole('link', { name: 'Pricing', exact: true }),
+      page.getByRole('link', { name: 'Plans and pricing', exact: true }),
     ).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
-  await page.getByRole('link', { name: 'Pricing', exact: true }).tap();
+  await page.getByRole('link', { name: 'Plans and pricing', exact: true }).tap();
   await page.waitForURL('**/pricing');
   await expect(page.getByText('π 65.19')).toBeVisible();
   await planButton(page).tap();
