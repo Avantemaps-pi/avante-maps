@@ -595,7 +595,7 @@ test('cancelled, voided and expired payments read "Cancelled", muted, with no si
 
 // ---- Abandoned payments are tidied when the Wallet opens (#174)
 
-test('opening Wallet calls cleanup once per session, with the session user, then refetches activity', async ({
+test('opening Wallet calls cleanup (its own once per session, besides the app start), with the session user, then refetches activity', async ({
   page,
 }) => {
   const pendingTopUp = payment(
@@ -618,8 +618,12 @@ test('opening Wallet calls cleanup once per session, with the session user, then
     paymentsAfterCleanup: [cancelledTopUp],
   });
   await page.goto('/wallet');
-  await expect.poll(() => requests.cleanup.length).toBe(1);
-  expect(requests.cleanup[0]).toEqual({ userId: mockUser.uid });
+  // The app start's (shared with Pricing) and the Wallet's own, both for the session user
+  await expect.poll(() => requests.cleanup.length).toBe(2);
+  expect(requests.cleanup).toEqual([
+    { userId: mockUser.uid },
+    { userId: mockUser.uid },
+  ]);
   await expect(activityRows(page).first()).toContainText(
     '11 Nov · 01:07 · Cancelled',
   );
@@ -632,7 +636,7 @@ test('opening Wallet calls cleanup once per session, with the session user, then
   await page.goBack();
   await expect(page).toHaveURL(/\/wallet/);
   await expect(activityRows(page).first()).toContainText('Cancelled');
-  expect(requests.cleanup).toHaveLength(1);
+  expect(requests.cleanup).toHaveLength(2);
 });
 
 test('a cleanup that fails shows nothing, and the page works as usual', async ({
@@ -645,7 +649,8 @@ test('a cleanup that fails shows nothing, and the page works as usual', async ({
     cleanupFails: true,
   });
   await page.goto('/wallet');
-  await expect.poll(() => requests.cleanup.length).toBe(1);
+  // The app start's and the Wallet's own
+  await expect.poll(() => requests.cleanup.length).toBe(2);
   await expect(activityRows(page).first()).toContainText(
     '1 Nov · 11:00 · Completed',
   );

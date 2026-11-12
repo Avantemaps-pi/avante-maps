@@ -434,6 +434,8 @@ test('an unfinished payment with a transaction is completed with its details, an
 }) => {
   const calls = await setup(page);
   await openDiagnostics(page);
+  // The app start's own stale cleanup
+  await expect.poll(() => calls.cleanup).toBe(1);
   await setFake(page, { incomplete: INCOMPLETE_WITH_TX });
   await authenticateForPayments(page);
   await expect.poll(() => calls.complete.length).toBe(1);
@@ -454,7 +456,8 @@ test('an unfinished payment with a transaction is completed with its details, an
   await expect(sdkRow(page, 'unfinished payment reported by Pi')).toHaveText(
     'pay_earlier (has a transaction; completed)',
   );
-  expect(calls.cleanup).toBe(0);
+  // None from the handler: only the app start's
+  expect(calls.cleanup).toBe(1);
 });
 
 test("an unfinished payment the server refuses to complete shows the server's message", async ({
@@ -482,9 +485,11 @@ test('an unfinished payment without a transaction: cleanup-stale-payments, then 
 }) => {
   const calls = await setup(page, { cleanup: { cleanedCount: 0 } });
   await openDiagnostics(page);
+  // The app start's own stale cleanup first, then the handler's
+  await expect.poll(() => calls.cleanup).toBe(1);
   await setFake(page, { incomplete: INCOMPLETE_NO_TX });
   await authenticateForPayments(page);
-  await expect.poll(() => calls.cleanup).toBe(1);
+  await expect.poll(() => calls.cleanup).toBe(2);
   await expect(page.getByText(UNFINISHED)).toBeVisible();
   expect(calls.complete).toHaveLength(0);
   await expect(sdkRow(page, 'unfinished payment reported by Pi')).toHaveText(
@@ -497,9 +502,11 @@ test('an unfinished payment without a transaction that cleanup cancels: says so'
 }) => {
   const calls = await setup(page, { cleanup: { cleanedCount: 1 } });
   await openDiagnostics(page);
+  // The app start's own stale cleanup first, then the handler's
+  await expect.poll(() => calls.cleanup).toBe(1);
   await setFake(page, { incomplete: INCOMPLETE_NO_TX });
   await authenticateForPayments(page);
-  await expect.poll(() => calls.cleanup).toBe(1);
+  await expect.poll(() => calls.cleanup).toBe(2);
   await expect(
     page.getByText(
       'An earlier unfinished Pi payment was cancelled. Please try again.',

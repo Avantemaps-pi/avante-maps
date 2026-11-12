@@ -166,3 +166,155 @@ test('no Pi key at all: 500, nothing touched', async () => {
     Deno.env.set('PI_API_KEY', 'test-pi-key');
   }
 });
+
+// ── paymentId: one payment the wallet closed without signing ──
+
+const OTHER = '00000000-0000-0000-0000-0000000000b2';
+const APPROVED = { ...OPEN, approved: true };
+const PI_OPEN = {
+  developer_approved: true,
+  transaction_verified: false,
+  developer_completed: false,
+  cancelled: false,
+  user_cancelled: false,
+};
+
+// Pi with the testnet key only, answering each payment as given: calls recorded as "action id"
+function setupOne(rows: Row[], piPayment: Record<string, unknown>) {
+  const piCalls: string[] = [];
+  const fake = installFakeSupabase({
+    tables: { payments: rows },
+    users: { 'owner-token': OWNER },
+    external: (url, init) => {
+      if (url.host !== 'api.minepi.com') return undefined;
+      const parts = url.pathname.split('/');
+      if (init?.method === 'GET') {
+        const id = parts.pop()!;
+        piCalls.push(`get ${id}`);
+        return Response.json({ identifier: id, amount: 142.05, user_uid: 'pi-uid', ...piPayment });
+      }
+      const action = parts.pop();
+      piCalls.push(`${action} ${parts.pop()}`);
+      return Response.json({ identifier: 'x' });
+    },
+  });
+  return {
+    fake,
+    piCalls,
+    row: (id: string) => fake.tables['payments']!.find((r) => r['payment_id'] === id)!,
+  };
+}
+
+const callOne = async (paymentId: string) => {
+  const res = await handler(
+    new Request('http://fn/cleanup-stale-payments', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer owner-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: OWNER, paymentId }),
+    }),
+  );
+  return { status: res.status, json: await res.json() };
+};
+
+// Approved a minute ago: far younger than the 10 minute staleness limit
+const approvedNow = (id: string, user = OWNER): Row => ({
+  payment_id: id,
+  user_id: user,
+  status: APPROVED,
+  txid: null,
+  created_at: minutesAgo(1),
+});
+
+test('paymentId, Pi shows nothing signed: cancelled at Pi and the row cancelled, whatever its age', async () => {
+  const { fake, piCalls, row } = setupOne(
+    [approvedNow('pay_u'), { ...approvedNow('pay_other_open'), created_at: minutesAgo(30) }],
+    { status: PI_OPEN, transaction: null },
+  );
+  const { status, json } = await callOne('pay_u');
+  assertEquals(status, 200);
+  assertEquals([json.success, json.cancelled, json.cleanedCount], [true, true, 1]);
+  assertEquals(piCalls, ['get pay_u', 'cancel pay_u']);
+  const s = row('pay_u')['status'] as Row;
+  assertEquals([s['cancelled'], s['completed'], s['error']], [true, false, 'Cancelled: not signed in the Pi wallet']);
+  // Only that payment: an old open one is left for the plain cleanup
+  assertEquals((row('pay_other_open')['status'] as Row)['cancelled'], false);
+  fake.restore();
+});
+
+test('paymentId, Pi shows a transaction: not cancelled, { signed: true } with the txid', async () => {
+  const { fake, piCalls, row } = setupOne([approvedNow('pay_s')], {
+    status: { ...PI_OPEN, transaction_verified: true },
+    transaction: { txid: 'tx_abc', verified: true, _link: 'l' },
+  });
+  const { status, json } = await callOne('pay_s');
+  assertEquals(status, 200);
+  assertEquals([json.signed, json.txid, json.cleanedCount], [true, 'tx_abc', 0]);
+  assertEquals(piCalls, ['get pay_s']);
+  assertEquals(row('pay_s')['status'], APPROVED);
+  fake.restore();
+});
+
+test('paymentId, Pi says developer_completed without a transaction object: still not cancelled', async () => {
+  const { fake, piCalls, row } = setupOne([approvedNow('pay_dc')], {
+    status: { ...PI_OPEN, developer_completed: true },
+    transaction: null,
+  });
+  const { json } = await callOne('pay_dc');
+  assertEquals(json.signed, true);
+  assert(!piCalls.some((c) => c.startsWith('cancel')));
+  assertEquals(row('pay_dc')['status'], APPROVED);
+  fake.restore();
+});
+
+test("paymentId of someone else's payment: 403, nothing asked of Pi, nothing changed", async () => {
+  const { fake, piCalls, row } = setupOne([approvedNow('pay_x', OTHER)], {
+    status: PI_OPEN,
+    transaction: null,
+  });
+  const { status } = await callOne('pay_x');
+  assertEquals(status, 403);
+  assertEquals(piCalls, []);
+  assertEquals(row('pay_x')['status'], APPROVED);
+  fake.restore();
+});
+
+test('paymentId of a completed payment: unchanged, nothing asked of Pi', async () => {
+  const done = { ...APPROVED, verified: true, completed: true };
+  const { fake, piCalls, row } = setupOne(
+    [{ ...approvedNow('pay_done'), status: done, txid: 'tx_done' }],
+    { status: PI_OPEN, transaction: null },
+  );
+  const { status, json } = await callOne('pay_done');
+  assertEquals([status, json.cleanedCount], [200, 0]);
+  assertEquals(piCalls, []);
+  assertEquals(row('pay_done')['status'], done);
+  fake.restore();
+});
+
+test('paymentId that Pi already cancelled: no second cancel at Pi, the row marked', async () => {
+  const { fake, piCalls, row } = setupOne([approvedNow('pay_pc')], {
+    status: { ...PI_OPEN, cancelled: true, user_cancelled: true },
+    transaction: null,
+  });
+  const { json } = await callOne('pay_pc');
+  assertEquals(json.cleanedCount, 1);
+  assertEquals(piCalls, ['get pay_pc']);
+  assertEquals((row('pay_pc')['status'] as Row)['cancelled'], true);
+  fake.restore();
+});
+
+test('no paymentId: as before, only payments over 10 minutes old are cancelled', async () => {
+  const { fake, piCalls, status } = setup(
+    [stale('pay_old'), { ...stale('pay_young'), created_at: minutesAgo(1) }],
+    { pay_old: 'testnet', pay_young: 'testnet' },
+  );
+  const { json } = await call();
+  assertEquals(json.cleanedCount, 1);
+  assertEquals(piCalls, ['cancel pay_old:testnet']);
+  assertEquals([status('pay_old')['cancelled'], status('pay_young')['cancelled']], [true, false]);
+  assertEquals(
+    status('pay_old')['error'],
+    'Payment automatically cancelled due to staleness (>10 minutes old)',
+  );
+  fake.restore();
+});

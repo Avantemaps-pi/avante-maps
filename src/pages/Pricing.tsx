@@ -14,6 +14,8 @@ import { PaymentOutcomeBanner } from '@/components/pricing/PaymentOutcomeBanner'
 import PlanCheckoutSheet from '@/components/pricing/PlanCheckoutSheet';
 import MetaTags from '@/components/seo/MetaTags';
 import { getOrigin } from '@/utils/browserEnv';
+import { cleanupStalePaymentsThrottled } from '@/utils/piPayment/cleanup';
+import { secureLog } from '@/utils/secureLogger';
 
 interface PricingLocationState {
   upgradeNeeded?: boolean;
@@ -48,6 +50,19 @@ const Pricing = () => {
   const handleBillingChange = (frequency: string) => {
     handleFrequencyChange(frequency);
   };
+
+  // Payments left unfinished earlier are cancelled before a new one starts (at most every 5 minutes
+  // per tab, shared with the app start). Errors are only logged
+  useEffect(() => {
+    if (!user?.uid) return;
+    void cleanupStalePaymentsThrottled().then((result) => {
+      if (result && !result.success) {
+        secureLog.warn('Stale payment cleanup failed', {
+          message: result.message,
+        });
+      }
+    });
+  }, [user?.uid]);
 
   // Check if user was directed here from another page for subscription upgrade
   useEffect(() => {

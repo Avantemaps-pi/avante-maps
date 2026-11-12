@@ -16,9 +16,14 @@ import {
 import type {
   PiPaymentInitiateOptions,
   PaymentCallbacks,
+  PiPaymentDTO,
 } from '../piNetwork/types';
 
-import { approvePayment, completePayment } from '@/api/payments';
+import {
+  approvePayment,
+  cleanupStalePayments,
+  completePayment,
+} from '@/api/payments';
 import { supabase } from '@/integrations/supabase/client';
 import { generateLifecycleId } from '@/utils/correlation';
 
@@ -54,6 +59,35 @@ function approveOnce(
   return approval;
 }
 
+// Payments handed to cleanup-stale-payments after the wallet closed unsigned: once each per page load
+const releasedUnsigned = new Set<string>();
+
+// The wallet closed without signing (the user cancelled, or not enough Pi): an approved payment can
+// never take Pi then, so its row is cancelled at once (at Pi too) instead of showing as Pending until
+// the stale cleanup. Fire-and-forget, once per payment, never for one that reached
+// onReadyForServerCompletion (it has a txid). If Pi says it was signed after all, it goes to
+// `complete`, the flow's usual completion
+function releaseUnsigned(
+  userId: string,
+  paymentId: string,
+  signed: Set<string>,
+  complete: (paymentId: string, txid: string) => void,
+): void {
+  if (signed.has(paymentId) || releasedUnsigned.has(paymentId)) return;
+  releasedUnsigned.add(paymentId);
+  void cleanupStalePayments(userId, paymentId).then((result) => {
+    if (result.signed && result.txid && !signed.has(paymentId)) {
+      complete(paymentId, result.txid);
+    }
+  });
+}
+
+// The wallet's own error when the balance is too low (its text varies)
+const isNotEnoughPi = (error: Error | undefined): boolean =>
+  /insufficient|not enough|enough (funds|pi|balance)/i.test(
+    error?.message ?? '',
+  );
+
 export interface PaymentResult {
   success: boolean;
   message: string;
@@ -61,7 +95,9 @@ export interface PaymentResult {
   paymentId?: string;
   /**
    * Why the server refused, when it says: amount_mismatch, plan_not_activated, amount_mismatch_after_completion.
-   * Or ours: timed_out (no result within PAYMENT_RESULT_LIMIT_MS), stopped_waiting (the caller aborted)
+   * Or ours: timed_out (no result within PAYMENT_RESULT_LIMIT_MS), stopped_waiting (the caller aborted).
+   * Or the wallet's, before anything was signed (nothing charged): cancelled, insufficient_funds,
+   * wallet_error
    */
   errorCode?: string;
 }
@@ -258,10 +294,15 @@ async function runSubscriptionPayment(
     };
     lcEmit('info', `${FN_LC}.lifecycle.start`, 'validation');
 
+    // Payments that reached onReadyForServerCompletion (they have a txid), and the one being approved
+    const signed = new Set<string>();
+    let approvingId: string | null = null;
+
     return new Promise<PaymentResult>((resolve) => {
       const callbacks: PaymentCallbacks = {
         onReadyForServerApproval: async (paymentId: string) => {
           lcEmit('info', `${FN_LC}.approve.start`, 'pi_api', { paymentId });
+          approvingId = paymentId;
           try {
             hooks?.onPaymentId?.(paymentId);
             const approvalResult = await approveOnce(
@@ -293,6 +334,7 @@ async function runSubscriptionPayment(
           }
         },
         onReadyForServerCompletion: async (paymentId: string, txid: string) => {
+          signed.add(paymentId);
           lcEmit('info', `${FN_LC}.complete.start`, 'pi_api', { paymentId, txid });
           try {
             const completionResult = await completePayment(
@@ -338,19 +380,49 @@ async function runSubscriptionPayment(
             paymentId,
             terminalReason: 'cancelled',
           });
+          if (signed.has(paymentId)) {
+            resolve({
+              success: false,
+              message: 'Payment was cancelled',
+              paymentId,
+            });
+            return;
+          }
+          releaseUnsigned(supabaseUserId, paymentId, signed, (id, txid) => {
+            void callbacks.onReadyForServerCompletion(id, txid);
+          });
           resolve({
             success: false,
             message: 'Payment was cancelled',
+            paymentId,
+            errorCode: 'cancelled',
           });
         },
-        onError: (error: Error) => {
+        onError: (error: Error, payment?: PiPaymentDTO) => {
           lcEmit('error', `${FN_LC}.error`, 'error', {
             terminalReason: 'error',
             message: error.message,
           });
+          const paymentId = payment?.identifier ?? approvingId;
+          const unsigned =
+            !payment?.transaction && !(paymentId && signed.has(paymentId));
+          if (paymentId && unsigned) {
+            releaseUnsigned(supabaseUserId, paymentId, signed, (id, txid) => {
+              void callbacks.onReadyForServerCompletion(id, txid);
+            });
+          }
           resolve({
             success: false,
             message: error.message || 'Payment failed',
+            ...(paymentId ? { paymentId } : {}),
+            // Nothing signed, so nothing charged: the UI can say so
+            ...(unsigned
+              ? {
+                  errorCode: isNotEnoughPi(error)
+                    ? 'insufficient_funds'
+                    : 'wallet_error',
+                }
+              : {}),
           });
         },
       };
@@ -491,10 +563,15 @@ async function runWalletTopUp(
     };
     lcEmit('info', `${FN_LC}.lifecycle.start`, 'validation');
 
+    // Payments that reached onReadyForServerCompletion (they have a txid), and the one being approved
+    const signed = new Set<string>();
+    let approvingId: string | null = null;
+
     return await new Promise<PaymentResult>((resolve) => {
       const callbacks: PaymentCallbacks = {
         onReadyForServerApproval: async (paymentId: string) => {
           lcEmit('info', `${FN_LC}.approve.start`, 'pi_api', { paymentId });
+          approvingId = paymentId;
           try {
             hooks?.onPaymentId?.(paymentId);
             const approvalResult = await approveOnce(
@@ -527,6 +604,7 @@ async function runWalletTopUp(
           }
         },
         onReadyForServerCompletion: async (paymentId: string, txid: string) => {
+          signed.add(paymentId);
           lcEmit('info', `${FN_LC}.complete.start`, 'pi_api', { paymentId, txid });
           try {
             const completionResult = await completePayment(
@@ -576,19 +654,49 @@ async function runWalletTopUp(
             paymentId,
             terminalReason: 'cancelled',
           });
+          if (signed.has(paymentId)) {
+            resolve({
+              success: false,
+              message: 'Payment was cancelled',
+              paymentId,
+            });
+            return;
+          }
+          releaseUnsigned(supabaseUserId, paymentId, signed, (id, txid) => {
+            void callbacks.onReadyForServerCompletion(id, txid);
+          });
           resolve({
             success: false,
             message: 'Payment was cancelled',
+            paymentId,
+            errorCode: 'cancelled',
           });
         },
-        onError: (error: Error) => {
+        onError: (error: Error, payment?: PiPaymentDTO) => {
           lcEmit('error', `${FN_LC}.error`, 'error', {
             terminalReason: 'error',
             message: error.message,
           });
+          const paymentId = payment?.identifier ?? approvingId;
+          const unsigned =
+            !payment?.transaction && !(paymentId && signed.has(paymentId));
+          if (paymentId && unsigned) {
+            releaseUnsigned(supabaseUserId, paymentId, signed, (id, txid) => {
+              void callbacks.onReadyForServerCompletion(id, txid);
+            });
+          }
           resolve({
             success: false,
             message: error.message || 'Payment failed',
+            ...(paymentId ? { paymentId } : {}),
+            // Nothing signed, so nothing charged: the UI can say so
+            ...(unsigned
+              ? {
+                  errorCode: isNotEnoughPi(error)
+                    ? 'insufficient_funds'
+                    : 'wallet_error',
+                }
+              : {}),
           });
         },
       };

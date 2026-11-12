@@ -25,7 +25,12 @@ export {
 export { getSubscriptionPrice } from './pricing';
 
 // Export cleanup utilities
-export { forceResolvePendingPayments, canProceedWithPayment, clearLocalPaymentData } from './cleanup';
+export {
+  forceResolvePendingPayments,
+  canProceedWithPayment,
+  clearLocalPaymentData,
+  cleanupStalePaymentsThrottled,
+} from './cleanup';
 
 // Export types
 export type { PaymentResult, SubscriptionFrequency } from './types';
