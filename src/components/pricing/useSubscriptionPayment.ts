@@ -9,6 +9,17 @@ import { withPiErrorHandling } from '@/utils/piPayment/piErrorHandler';
 import { usePaymentStatusPolling } from '@/hooks/usePaymentStatusPolling';
 import { TIERS } from './pricingTiers';
 
+/**
+ * A plan payment that ended without being completed, for the Pricing banner:
+ * - not_completed: the wallet closed (cancelled, or its error) before anything was signed;
+ * - not_enough_pi: the same, and the wallet said the balance is too low;
+ * - unconfirmed: no result within the 90 s limit
+ */
+export type PaymentOutcome = 'not_completed' | 'not_enough_pi' | 'unconfirmed';
+
+// The wallet closed before anything was signed, so nothing was charged
+const WALLET_CLOSED_CODES = ['cancelled', 'insufficient_funds', 'wallet_error'];
+
 // TODO(PiRC2): When the Pi Network PiRC2 subscription contract ships and
 // `FEATURE_FLAGS.pirc2Subscriptions` is enabled, route monthly renewals
 // through the contract (server-side cron + allowance) instead of the
@@ -18,6 +29,9 @@ export const useSubscriptionPayment = () => {
   const { user, isAuthenticated, login, refreshUserData } = useAuth();
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [selectedFrequency, setSelectedFrequency] = useState("monthly");
+  const [paymentOutcome, setPaymentOutcome] = useState<PaymentOutcome | null>(
+    null,
+  );
   const polling = usePaymentStatusPolling();
 
   // Disable duplicate submissions while processing OR while a payment is being
@@ -85,6 +99,7 @@ export const useSubscriptionPayment = () => {
 
     setIsProcessingPayment(true);
     polling.reset();
+    setPaymentOutcome(null);
 
     try {
       console.log("Refreshing user data before payment...");
@@ -111,7 +126,23 @@ export const useSubscriptionPayment = () => {
         );
       });
 
-      if (result && result.success) {
+      if (
+        result &&
+        result.errorCode &&
+        WALLET_CLOSED_CODES.includes(result.errorCode)
+      ) {
+        // Nothing was signed: the banner says so, and the plans can be chosen again at once
+        polling.reset();
+        setPaymentOutcome(
+          result.errorCode === 'insufficient_funds'
+            ? 'not_enough_pi'
+            : 'not_completed',
+        );
+      } else if (result?.errorCode === 'timed_out') {
+        // The 90 s limit: a late completion still credits, so no "nothing was charged" here
+        polling.reset();
+        setPaymentOutcome('unconfirmed');
+      } else if (result && result.success) {
         toast.success(result.message);
         if (result.shouldRefreshUser) {
           console.log("Payment successful, refreshing user data...");
@@ -179,6 +210,8 @@ export const useSubscriptionPayment = () => {
   return {
     isProcessingPayment,
     isPaymentLocked,
+    paymentOutcome,
+    dismissPaymentOutcome: () => setPaymentOutcome(null),
     paymentPolling: {
       paymentId: polling.paymentId,
       status: polling.status,

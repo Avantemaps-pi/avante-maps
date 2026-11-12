@@ -547,8 +547,9 @@ test('sizes and selected row: 44px Close, 64px rows, 2px primary border on the s
   expect(noSideways).toBe(true);
 });
 
-// Pi's approval window is 60 s: with no callback at all, the plan payment ends after 90 s (#174)
-test('Pi never calls back: after 90 s the payment times out with the message, and the plan can be chosen again', async ({
+// Pi's approval window is 60 s: with no callback at all, the plan payment ends after 90 s (#174). A
+// late completion still credits, so the banner doesn't say nothing was charged
+test('Pi never calls back: after 90 s the "couldn\'t confirm" banner, and the plan can be chosen again', async ({
   page,
 }) => {
   await page.clock.install();
@@ -562,8 +563,16 @@ test('Pi never calls back: after 90 s the payment times out with the message, an
 
   await page.clock.fastForward('01:31');
   await expect(
-    page.getByText('The payment timed out. No Pi was taken. Please try again.'),
+    page.getByText("We couldn't confirm this payment yet"),
   ).toBeVisible();
+  await expect(
+    page.getByText(
+      'If Pi left your wallet, it will be credited automatically.',
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Nothing was charged. You can try again.'),
+  ).toHaveCount(0);
   await expect(planButton(page)).toBeEnabled();
 });
 
@@ -724,4 +733,83 @@ test('the plain cleanup runs once when the app opens on Pricing, not again withi
   await expect(page.getByText('π 65.19')).toBeVisible();
   await page.waitForTimeout(1000);
   expect(cleanupCalls).toHaveLength(1);
+});
+
+// 13 Nov: after the wallet's "not enough funds", Pricing stayed on "Confirming payment…" with the
+// button on "Processing…"
+test('the wallet errors with not enough funds: "Payment not completed" with the funds line, buttons usable, no Confirming', async ({
+  page,
+}) => {
+  await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    walletCloses: { error: 'Insufficient funds' },
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  const banner = page
+    .getByRole('status')
+    .filter({ hasText: 'Payment not completed' });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('Nothing was charged. You can try again.');
+  await expect(banner).toContainText('Not enough Pi in your wallet.');
+  await expect(page.getByText('Confirming payment…')).toHaveCount(0);
+  await expect(page.getByText(/Processing/)).toHaveCount(0);
+  await expect(planButton(page)).toBeEnabled();
+  // Still nothing after the poller's interval
+  await page.waitForTimeout(3500);
+  await expect(page.getByText('Confirming payment…')).toHaveCount(0);
+
+  // Dismissible, and the plan can be chosen again
+  await banner.getByRole('button', { name: 'Dismiss' }).tap();
+  await expect(banner).toHaveCount(0);
+  await planButton(page).tap();
+  await expect(sheet(page)).toBeVisible();
+});
+
+test('the wallet cancels: "Payment not completed" without the funds line, buttons usable', async ({
+  page,
+}) => {
+  await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    walletCloses: 'cancel',
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  const banner = page
+    .getByRole('status')
+    .filter({ hasText: 'Payment not completed' });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('Nothing was charged. You can try again.');
+  await expect(banner).not.toContainText('Not enough Pi');
+  await expect(page.getByText('Confirming payment…')).toHaveCount(0);
+  await expect(planButton(page)).toBeEnabled();
+});
+
+test('a signed payment shows "Confirming payment…" while it is completed', async ({
+  page,
+}) => {
+  let releaseComplete = () => {};
+  const held = new Promise<void>((resolve) => (releaseComplete = resolve));
+  await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    complete: PIPELINE_OK,
+  });
+  await page.route('**/functions/v1/complete-payment', async (route) => {
+    await held;
+    return route.fulfill({ json: PIPELINE_OK.json });
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  await expect(page.getByText('Confirming payment…')).toBeVisible();
+  releaseComplete();
+  await expect(page.getByText(/Successfully subscribed/)).toBeVisible();
 });

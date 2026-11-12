@@ -202,6 +202,7 @@ export async function executeSubscriptionPayment(
   amountPi: number,
   tier: string,
   frequency: 'monthly' | 'yearly',
+  // onPaymentId: once the payment is signed (it has a txid) and is being completed
   hooks?: { onPaymentId?: (paymentId: string) => void; planName?: string }
 ): Promise<PaymentResult> {
   if (paymentInProgress) {
@@ -304,7 +305,6 @@ async function runSubscriptionPayment(
           lcEmit('info', `${FN_LC}.approve.start`, 'pi_api', { paymentId });
           approvingId = paymentId;
           try {
-            hooks?.onPaymentId?.(paymentId);
             const approvalResult = await approveOnce(
               { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, piAccessToken: getPiAccessToken() },
               { lifecycleId }
@@ -337,6 +337,9 @@ async function runSubscriptionPayment(
           signed.add(paymentId);
           lcEmit('info', `${FN_LC}.complete.start`, 'pi_api', { paymentId, txid });
           try {
+            // Signed: only now is there a payment for the caller to confirm (not at approval, when
+            // the wallet can still close without signing)
+            hooks?.onPaymentId?.(paymentId);
             const completionResult = await completePayment(
               { paymentId, userId: supabaseUserId, amount: amountPi, memo, metadata, txid, piAccessToken: getPiAccessToken() },
               { lifecycleId }
@@ -415,8 +418,10 @@ async function runSubscriptionPayment(
             success: false,
             message: error.message || 'Payment failed',
             ...(paymentId ? { paymentId } : {}),
-            // Nothing signed, so nothing charged: the UI can say so
-            ...(unsigned
+            // The wallet had a payment and closed without signing it: nothing charged, and the UI
+            // can say so. An error before any payment (SDK, permissions, an earlier unfinished
+            // payment) keeps its own message
+            ...(paymentId && unsigned
               ? {
                   errorCode: isNotEnoughPi(error)
                     ? 'insufficient_funds'
@@ -689,8 +694,10 @@ async function runWalletTopUp(
             success: false,
             message: error.message || 'Payment failed',
             ...(paymentId ? { paymentId } : {}),
-            // Nothing signed, so nothing charged: the UI can say so
-            ...(unsigned
+            // The wallet had a payment and closed without signing it: nothing charged, and the UI
+            // can say so. An error before any payment (SDK, permissions, an earlier unfinished
+            // payment) keeps its own message
+            ...(paymentId && unsigned
               ? {
                   errorCode: isNotEnoughPi(error)
                     ? 'insufficient_funds'

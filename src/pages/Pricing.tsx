@@ -44,6 +44,8 @@ const Pricing = () => {
     isProcessingPayment,
     isPaymentLocked,
     paymentPolling,
+    paymentOutcome,
+    dismissPaymentOutcome,
   } = useSubscriptionPayment();
   
   // Handle frequency change
@@ -158,7 +160,11 @@ const Pricing = () => {
               },
             }
           : {})}
-        onDismiss={() => paymentPolling.reset()}
+        outcome={paymentOutcome}
+        onDismiss={() => {
+          paymentPolling.reset();
+          dismissPaymentOutcome();
+        }}
       />
       <PricingSection
         title="Simple, transparent pricing"
