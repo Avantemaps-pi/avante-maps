@@ -167,22 +167,34 @@ async function asMainnet(page: Page) {
   });
 }
 
-test('mainnet host: no chip, and the USD line', async ({ page }) => {
+// Pi apps show Pi only: no fiat amount or currency anywhere on the page
+const expectNoFiat = async (page: Page) => {
+  await expect(page.locator('body')).not.toContainText(/USD|\$|≈/);
+};
+
+test('mainnet host: no chip, and no USD or $ anywhere', async ({ page }) => {
   await setup(page, { balance: 10 });
   await asMainnet(page);
   await page.goto('https://mainnet.avantemaps.com/wallet');
   const card = balanceCard(page);
-  await expect(card.getByText('≈ $5.00 USD')).toBeVisible();
-  await expect(card.getByText('≈ $5.00 USD')).toHaveCSS('opacity', '0.95');
+  await expect(card.getByText('10.00')).toBeVisible();
   await expect(card.getByText('Testnet Pi')).toHaveCount(0);
+  await expectNoFiat(page);
 });
 
-test('mainnet with no price: "USD value unavailable", not a made-up rate', async ({ page }) => {
+test('mainnet with no price: still only π, no "USD value unavailable"', async ({ page }) => {
   await setup(page, { balance: 10, priceFails: true });
   await asMainnet(page);
   await page.goto('https://mainnet.avantemaps.com/wallet');
-  await expect(balanceCard(page).getByText('USD value unavailable')).toBeVisible();
-  await expect(balanceCard(page).getByText(/≈/)).toHaveCount(0);
+  await expect(balanceCard(page).getByText('10.00')).toBeVisible();
+  await expectNoFiat(page);
+});
+
+test('testnet host: no USD or $ anywhere on the Wallet', async ({ page }) => {
+  await setup(page);
+  await page.goto('/wallet');
+  await expect(balanceCard(page).getByText('23.50')).toBeVisible();
+  await expectNoFiat(page);
 });
 
 test('a balance that fails to load is not shown as 0.00', async ({ page }) => {

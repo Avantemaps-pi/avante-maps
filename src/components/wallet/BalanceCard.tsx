@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { isMainnetPiHost } from '@/config/environment';
-import { usePiPrice } from '@/hooks/usePiPrice';
 
 interface BalanceCardProps {
   balance?: number | null;
@@ -10,14 +9,11 @@ interface BalanceCardProps {
 }
 
 const BalanceCard: React.FC<BalanceCardProps> = ({ balance, isLoading, isError }) => {
-  const { piPrice, isLoading: isPriceLoading, error: piPriceError } = usePiPrice();
   // Read after mount: the page is server-rendered, and there's no window on the server
   const [hostname, setHostname] = useState<string | null>(null);
   useEffect(() => setHostname(window.location.hostname), []);
 
   const piBalance = typeof balance === 'number' && !Number.isNaN(balance) ? balance : 0;
-  // usePiPrice falls back to a made-up rate when pi_price can't be read
-  const usdEquivalent = piPrice && !piPriceError ? piBalance * piPrice : null;
   const isMainnet = hostname !== null && isMainnetPiHost(hostname);
 
   return (
@@ -42,11 +38,6 @@ const BalanceCard: React.FC<BalanceCardProps> = ({ balance, isLoading, isError }
       )}
       <p className="mt-1 text-sm opacity-95">Pays for plans in the app.</p>
       <p className="text-xs leading-[17px] opacity-95">Your Pi Wallet balance stays in the Pi Wallet app.</p>
-      {isMainnet && !isError && !isPriceLoading && (
-        <p className="mt-1 text-xs opacity-95">
-          {usdEquivalent !== null ? `≈ $${usdEquivalent.toFixed(2)} USD` : 'USD value unavailable'}
-        </p>
-      )}
     </section>
   );
 };
