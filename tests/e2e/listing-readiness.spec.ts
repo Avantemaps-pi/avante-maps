@@ -128,3 +128,41 @@ test('Contact: support@avantemaps.com shown, no partnerships@ mailbox', async ({
   await expect(page.getByText('support@avantemaps.com', { exact: true })).toBeVisible();
   await expect(page.locator('body')).not.toContainText(/partnerships@|inquiries@avantemaps\.com/);
 });
+
+// ---- Realtime
+
+test("the page's CSP lets the Supabase realtime socket (wss://) connect", async ({ page }) => {
+  await setup(page, { loggedIn: true });
+  await page.goto('/notifications');
+  const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
+  const connectSrc = (csp ?? '').split(';').map((d) => d.trim()).find((d) => d.startsWith('connect-src'));
+  // https: doesn't cover wss:, so the realtime origin has to be named
+  expect(connectSrc?.split(/\s+/)).toContain('wss://xvpwbocwasbtzrzrxyvu.supabase.co');
+});
+
+test('signed in: Notifications subscribes to realtime without the "after subscribe()" error', async ({ page }) => {
+  const problems: string[] = [];
+  page.on('console', (msg) => {
+    const text = msg.text();
+    if (/Content Security Policy|postgres_changes callbacks/.test(text)) problems.push(text);
+  });
+  page.on('pageerror', (error) => problems.push(error.message));
+  // A local stand-in for Supabase realtime (Playwright replaces the page's WebSocket, so this
+  // can't show a CSP block; the test above covers the CSP)
+  let sockets = 0;
+  await page.routeWebSocket(/\/realtime\/v1\/websocket/, (ws) => {
+    sockets += 1;
+    ws.onMessage((raw) => {
+      const msg = JSON.parse(String(raw)) as { topic: string; event: string; ref: string; join_ref?: string };
+      if (msg.event === 'phx_join' || msg.event === 'heartbeat') {
+        ws.send(JSON.stringify({ topic: msg.topic, event: 'phx_reply', ref: msg.ref, join_ref: msg.join_ref, payload: { status: 'ok', response: { postgres_changes: [] } } }));
+      }
+    });
+  });
+  await setup(page, { loggedIn: true });
+  await page.goto('/notifications');
+  await expect.poll(() => sockets, { timeout: 15_000 }).toBeGreaterThan(0);
+  // Long enough for the subscription (and a StrictMode remount in dev) to have run
+  await page.waitForTimeout(1_500);
+  expect(problems).toEqual([]);
+});

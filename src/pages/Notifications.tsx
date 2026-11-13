@@ -38,14 +38,21 @@ const Notifications = () => {
     loadNotifications();
   }, []);
 
-  // Set up real-time subscription
+  // Set up real-time subscription.
+  // supabase.channel() returns the existing channel for a name that's still in use, so each mount
+  // gets its own name; and a mount that ends before getUser() answers removes its channel itself
   useEffect(() => {
+    let cancelled = false;
+    const suffix =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
     const setupRealtime = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user || cancelled) return;
 
       const channel = supabase
-        .channel('notifications-realtime')
+        .channel(`notifications-realtime-${suffix}`)
         .on(
           'postgres_changes',
           {
@@ -97,8 +104,10 @@ const Notifications = () => {
     setupRealtime();
 
     return () => {
+      cancelled = true;
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
     };
   }, []);

@@ -94,7 +94,7 @@ const CSP_CONTENT = `
       style-src 'self' 'unsafe-inline' https:;
       img-src 'self' https: data: blob:;
       font-src 'self' https: data:;
-      connect-src 'self' https://api.minepi.com https://socialchain.app https:;
+      connect-src 'self' https://api.minepi.com https://socialchain.app https: wss://xvpwbocwasbtzrzrxyvu.supabase.co;
       frame-src https:;
       object-src 'none';
       base-uri 'self';
