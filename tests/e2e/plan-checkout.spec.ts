@@ -171,6 +171,20 @@ async function openPricingAt(page: Page, amount: string) {
   await expect(page.getByText(`π ${amount}`)).toBeVisible();
 }
 
+// The banner sits above the plans: start from the Small Business card scrolled into view, as on a phone
+async function openSheetScrolledToPlan(page: Page) {
+  await openPricing(page);
+  await planButton(page).scrollIntoViewIfNeeded();
+  await page.evaluate(() => window.scrollBy(0, 200));
+  await expect(
+    page.locator('h1, h2').filter({ hasText: 'Simple, transparent pricing' }),
+  ).not.toBeInViewport();
+  await planButton(page).tap();
+  await expect(sheet(page)).toBeVisible();
+}
+
+const outcomeToasts = (page: Page) => page.locator('[data-sonner-toast]');
+
 async function openSheet(page: Page) {
   await openPricing(page);
   await planButton(page).tap();
@@ -562,14 +576,19 @@ test('Pi never calls back: after 90 s the "couldn\'t confirm" banner, and the pl
   await expect(planButton(page)).toBeDisabled();
 
   await page.clock.fastForward('01:31');
+  const banner = page
+    .getByRole('status')
+    .filter({ hasText: "We couldn't confirm this payment yet" });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText(
+    'If Pi left your wallet, it will be credited automatically.',
+  );
   await expect(
-    page.getByText("We couldn't confirm this payment yet"),
-  ).toBeVisible();
-  await expect(
-    page.getByText(
-      'If Pi left your wallet, it will be credited automatically.',
-    ),
-  ).toBeVisible();
+    outcomeToasts(page).filter({
+      hasText:
+        "We couldn't confirm this payment yet. If Pi left your wallet, it will be credited automatically.",
+    }),
+  ).toHaveCount(1);
   await expect(
     page.getByText('Nothing was charged. You can try again.'),
   ).toHaveCount(0);
@@ -745,7 +764,7 @@ test('the wallet errors with not enough funds: "Payment not completed" with the 
     approve: PIPELINE_OK,
     walletCloses: { error: 'Insufficient funds' },
   });
-  await openSheet(page);
+  await openSheetScrolledToPlan(page);
   await sheet(page)
     .getByRole('button', { name: 'Continue in Pi Wallet' })
     .tap();
@@ -755,6 +774,18 @@ test('the wallet errors with not enough funds: "Payment not completed" with the 
   await expect(banner).toBeVisible();
   await expect(banner).toContainText('Nothing was charged. You can try again.');
   await expect(banner).toContainText('Not enough Pi in your wallet.');
+  // 13 Nov: the banner was off screen and no toast showed. Now one toast, and the banner scrolled
+  // into view with focus on its heading
+  await expect(
+    outcomeToasts(page).filter({
+      hasText: 'Not enough Pi in your wallet. Nothing was charged.',
+    }),
+  ).toHaveCount(1);
+  await expect(outcomeToasts(page)).toHaveCount(1);
+  await expect(banner).toBeInViewport();
+  await expect(
+    banner.getByRole('heading', { name: 'Payment not completed' }),
+  ).toBeFocused();
   await expect(page.getByText('Confirming payment…')).toHaveCount(0);
   await expect(page.getByText(/Processing/)).toHaveCount(0);
   await expect(planButton(page)).toBeEnabled();
@@ -777,7 +808,7 @@ test('the wallet cancels: "Payment not completed" without the funds line, button
     approve: PIPELINE_OK,
     walletCloses: 'cancel',
   });
-  await openSheet(page);
+  await openSheetScrolledToPlan(page);
   await sheet(page)
     .getByRole('button', { name: 'Continue in Pi Wallet' })
     .tap();
@@ -787,6 +818,14 @@ test('the wallet cancels: "Payment not completed" without the funds line, button
   await expect(banner).toBeVisible();
   await expect(banner).toContainText('Nothing was charged. You can try again.');
   await expect(banner).not.toContainText('Not enough Pi');
+  await expect(
+    outcomeToasts(page).filter({
+      hasText: 'Payment not completed. Nothing was charged.',
+    }),
+  ).toHaveCount(1);
+  await expect(outcomeToasts(page)).toHaveCount(1);
+  await expect(page.getByText('Payment was cancelled by user')).toHaveCount(0);
+  await expect(banner).toBeInViewport();
   await expect(page.getByText('Confirming payment…')).toHaveCount(0);
   await expect(planButton(page)).toBeEnabled();
 });
