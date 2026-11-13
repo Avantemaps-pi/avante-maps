@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import AvanteMark from '@/components/brand/AvanteMark';
 import LoginDialog from '@/components/auth/LoginDialog';
 import mapPreview from '@/assets/map-preview.jpg';
-import piNetworkLogo from '@/assets/pi-network-logo.png';
 
 const features = [
   { icon: MapPin, title: 'Interactive Map', desc: "See exactly where Pi-accepting businesses are, filtered by what you're looking for." },
@@ -154,13 +153,7 @@ const LandingPage: React.FC = () => {
       {/* PI CALLOUT */}
       <section className="py-24 sm:py-32 px-5 sm:px-6">
         <div className="max-w-2xl mx-auto text-center">
-          <img
-            src={piNetworkLogo}
-            alt="Pi Network"
-            className="mx-auto mb-7 w-14 h-14 rounded-full object-contain"
-            width={56}
-            height={56}
-          />
+          <AvanteMark className="mx-auto mb-7 h-14 w-14 text-primary" />
           <h2 className="font-semibold tracking-tight text-brand-navy text-2xl sm:text-3xl md:text-4xl">
             Made For Pi. Not Made By Pi.
           </h2>
@@ -222,7 +215,7 @@ const LandingPage: React.FC = () => {
           </div>
         </div>
         <div className="max-w-5xl mx-auto mt-12 pt-6 border-t border-white/15 dark:border-border text-center text-xs text-white/60 dark:text-muted-foreground">
-          © 2026 Avante Maps. Built on the Pi Network.
+          © {new Date().getFullYear()} Avante Maps Pty Ltd. An independent app for Pi users.
         </div>
       </footer>
 

@@ -78,7 +78,7 @@ const Footer: React.FC = () => {
 
         {/* Bottom bar */}
         <div className="mt-8 sm:mt-10 pt-6 border-t border-white/10 dark:border-border text-center text-xs text-white/60 dark:text-muted-foreground">
-          © {new Date().getFullYear()} Avante Maps. Built on the Pi Network.
+          © {new Date().getFullYear()} Avante Maps Pty Ltd. An independent app for Pi users.
         </div>
       </div>
     </footer>

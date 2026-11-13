@@ -22,7 +22,7 @@ const FAQS = [
   },
   {
     q: 'Is Avante Maps affiliated with Pi Network?',
-    a: 'Avante Maps is an independent platform created by a Pi Network enthusiast to support the Pi ecosystem.',
+    a: 'No. Avante Maps is an independent platform created by a Pi Network enthusiast to support the Pi ecosystem.',
   },
 ];
 

@@ -488,7 +488,7 @@ const Index = () => {
             '@context': 'https://schema.org',
             '@type': 'WebApplication',
             'name': 'Avante Maps',
-            'description': 'Local business discovery platform powered by Pi Network',
+            'description': 'Local business discovery platform for Pi Network users',
             'url': getOrigin(),
             'applicationCategory': 'BusinessApplication',
             'operatingSystem': 'Web',
