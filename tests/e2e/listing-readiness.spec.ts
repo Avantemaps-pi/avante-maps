@@ -74,3 +74,21 @@ test('Contact FAQ: "Is Avante Maps affiliated with Pi Network?" starts with "No.
     await expect(answer).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
 });
+
+// ---- Share image
+
+test('og-image.png is a 1200x630 PNG, and the page says so', async ({ page, request }) => {
+  const response = await request.get('/og-image.png');
+  expect(response.status()).toBe(200);
+  const png = await response.body();
+  // PNG signature, then the IHDR chunk: width and height as big-endian 32-bit integers
+  expect(png.subarray(1, 4).toString('ascii')).toBe('PNG');
+  expect(png.readUInt32BE(16)).toBe(1200);
+  expect(png.readUInt32BE(20)).toBe(630);
+  expect(png.length).toBeLessThanOrEqual(300 * 1024);
+
+  await setup(page);
+  await page.goto('/');
+  await expect(page.locator('meta[property="og:image:width"]').first()).toHaveAttribute('content', '1200');
+  await expect(page.locator('meta[property="og:image:height"]').first()).toHaveAttribute('content', '630');
+});
