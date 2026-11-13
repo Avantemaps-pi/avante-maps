@@ -6,7 +6,7 @@
  * Supports what the functions use: select with eq/in/lt/gt filters, single
  * and maybeSingle, update (PATCH) with filters and returned rows, upsert
  * (POST with on_conflict), insert that fails on a duplicate key (primaryKeys)
- * and delete. RPC calls go to `rpc`.
+ * and delete. RPC calls go to `rpc`. Other auth endpoints (admin users, token) go to `auth`.
  */
 
 export type Row = Record<string, unknown>;
@@ -95,6 +95,8 @@ export function installFakeSupabase(options: {
   users: Record<string, string>;
   external?: (url: URL, init: RequestInit | undefined) => Promise<Response | undefined> | Response | undefined;
   rpc?: (name: string, args: Row) => Response;
+  /** Auth endpoints other than "get user" (e.g. /auth/v1/admin/users, /auth/v1/token), with the parsed JSON body */
+  auth?: (url: URL, method: string, body: Row | null) => Promise<Response> | Response;
   /** Tables whose inserts fail */
   failInserts?: string[];
   /** Table → primary key column(s): a plain insert (no on_conflict) of an existing key fails with 23505 */
@@ -122,6 +124,11 @@ export function installFakeSupabase(options: {
       return id
         ? Response.json({ id, aud: 'authenticated', role: 'authenticated' })
         : Response.json({ message: 'invalid JWT' }, { status: 401 });
+    }
+
+    if (url.pathname.startsWith('/auth/v1/') && options.auth) {
+      const text = method === 'GET' ? '' : await req.text();
+      return options.auth(url, method, text ? JSON.parse(text) : null);
     }
 
     if (url.pathname.startsWith('/rest/v1/rpc/') && options.rpc) {

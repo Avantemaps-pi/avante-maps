@@ -37,6 +37,12 @@ const supabase = createClient(
     },
   }
 );
+
+// A new password for every sign-in: 32 random bytes as hex. Never derived from the uid or a key,
+// never logged or returned. The session is all the client gets
+const randomPassword = (): string =>
+  Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, '0')).join('');
+
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const MAX_REQUESTS = 10; // 10 requests per minute
@@ -138,30 +144,29 @@ Deno.serve(async (req: Request) => {
       }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // Helper: Generate a deterministic password from pi_uid (never exposed to user)
-    const generateUserPassword = (piUid: string): string => {
-      // Use service role key as salt (only known server-side)
-      const salt = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.substring(0, 32) || 'default-salt';
-      return `pi_${piUid}_${salt}`.substring(0, 72);
+    // Helper: Create session using signInWithPassword (most reliable for server-side).
+    // Every sign-in sets a fresh random password first, so no password outlives the request.
+    // Two sign-ins for the same user can race (the other one replaces the password between our
+    // update and our sign-in): one retry with another new password
+    const setPasswordAndSignIn = async (email: string, supabaseUserId: string) => {
+      const password = randomPassword();
+      const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(supabaseUserId, { password });
+      if (updateError) return { data: null, error: updateError };
+      return await supabase.auth.signInWithPassword({ email, password });
     };
 
-    // Helper: Create session using signInWithPassword (most reliable for server-side)
-    // Try sign-in first; only reset password if credentials are invalid.
-    const createUserSession = async (email: string, password: string, supabaseUserId: string) => {
-      let { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const createUserSession = async (email: string, supabaseUserId: string) => {
+      let { data, error } = await setPasswordAndSignIn(email, supabaseUserId);
 
       if (!error && data?.session) return { data, error };
 
       const msg = (error?.message || '').toLowerCase();
-      const status = (error as any)?.status;
+      const status = (error as { status?: number } | null)?.status;
       const invalidCreds = msg.includes('invalid login') || msg.includes('invalid') || status === 400;
 
       if (invalidCreds) {
-        console.warn(`🔧 [${traceId}] signInWithPassword failed (invalid creds). Resetting password + retrying...`);
-        const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(supabaseUserId, { password });
-        if (updateError) return { data: null, error: updateError };
-
-        ({ data, error } = await supabase.auth.signInWithPassword({ email, password }));
+        console.warn(`🔧 [${traceId}] signInWithPassword failed (invalid creds, likely a concurrent sign-in). Retrying once with a new password...`);
+        ({ data, error } = await setPasswordAndSignIn(email, supabaseUserId));
       }
 
       return { data, error };
@@ -173,7 +178,6 @@ Deno.serve(async (req: Request) => {
 
       // Use UID-based email to avoid UNIQUE constraint violations when username changes
       const email = `${uid}@pi.local`;
-      const password = generateUserPassword(uid);
 
       // Ensure user exists (idempotent)
       const { data: usersList, error: listError } = await supabaseAdmin.auth.admin.listUsers();
@@ -193,7 +197,7 @@ Deno.serve(async (req: Request) => {
         console.log(`🔨 [${traceId}] Creating new test user:`, { pi_uid: uid, email, username });
         const { data: newUserData, error: createError } = await supabaseAdmin.auth.admin.createUser({
           email,
-          password,
+          password: randomPassword(),
           email_confirm: true,
           user_metadata: { username, full_name: username, pi_uid: uid },
         });
@@ -236,7 +240,6 @@ Deno.serve(async (req: Request) => {
           const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(supabaseUserId, {
             email,
             email_confirm: true,
-            password, // Reset password to ensure it matches
             user_metadata: { ...existingUser.user_metadata, pi_uid: uid, username },
           });
           if (updateError) {
@@ -251,7 +254,7 @@ Deno.serve(async (req: Request) => {
 
       console.log(`🔐 [${traceId}] [TEST] Creating session for user ${supabaseUserId}`);
 
-      const { data: sessionData, error: sessionError } = await createUserSession(email, password, supabaseUserId);
+      const { data: sessionData, error: sessionError } = await createUserSession(email, supabaseUserId);
 
       if (sessionError || !sessionData?.session) {
         console.error(`❌ [${traceId}] [TEST] Failed to create session:`, sessionError);
@@ -355,7 +358,6 @@ Deno.serve(async (req: Request) => {
     console.log(`🔧 [${traceId}] Setting up Supabase auth integration`);
     // Use UID-based email to avoid UNIQUE constraint violations when username changes
     const email = `${uid}@pi.local`;
-    const password = generateUserPassword(uid);
 
     const { data: usersList, error: listError } = await supabaseAdmin.auth.admin.listUsers();
     if (listError) {
@@ -374,7 +376,7 @@ Deno.serve(async (req: Request) => {
       console.log(`🔨 [${traceId}] Creating new Supabase user:`, { pi_uid: uid, email, username });
       const { data: newUserData, error: createError } = await supabaseAdmin.auth.admin.createUser({
         email,
-        password,
+        password: randomPassword(),
         email_confirm: true,
         user_metadata: { username, full_name: username, pi_uid: uid },
       });
@@ -418,7 +420,6 @@ Deno.serve(async (req: Request) => {
         const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(supabaseUserId, {
           email,
           email_confirm: true,
-          password, // Reset password to ensure it matches
           user_metadata: { ...existingUser.user_metadata, pi_uid: uid, username },
         });
         if (updateError) {
@@ -433,7 +434,7 @@ Deno.serve(async (req: Request) => {
 
     console.log(`🔐 [${traceId}] Creating session for user ${supabaseUserId}`);
     
-    const { data: sessionData, error: sessionError } = await createUserSession(email, password, supabaseUserId);
+    const { data: sessionData, error: sessionError } = await createUserSession(email, supabaseUserId);
 
     if (sessionError || !sessionData?.session) {
       console.error(`❌ [${traceId}] Failed to create session:`, sessionError);
