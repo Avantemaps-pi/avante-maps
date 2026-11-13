@@ -47,6 +47,25 @@ const Pricing = () => {
     paymentOutcome,
     dismissPaymentOutcome,
   } = useSubscriptionPayment();
+  const outcomeRef = useRef<HTMLDivElement>(null);
+
+  // The banner is above the plans, so after tapping a plan lower down it is off screen: bring it
+  // into view, and move focus to its heading so screen readers announce it
+  const revealOutcome = () => {
+    const wrapper = outcomeRef.current;
+    if (!wrapper) return;
+    const reduceMotion = window.matchMedia?.(
+      '(prefers-reduced-motion: reduce)',
+    ).matches;
+    wrapper.scrollIntoView({
+      behavior: reduceMotion ? 'auto' : 'smooth',
+      block: 'start',
+    });
+    wrapper.querySelector<HTMLElement>('h3')?.focus({ preventScroll: true });
+  };
+  useEffect(() => {
+    if (paymentOutcome) revealOutcome();
+  }, [paymentOutcome]);
   
   // Handle frequency change
   const handleBillingChange = (frequency: string) => {
@@ -111,8 +130,13 @@ const Pricing = () => {
   };
 
   // Focus returns to the plan's button, also on browsers where a tap doesn't focus it
+  // If the payment already ended while the sheet was closing, the outcome banner gets focus instead
   const handleCheckoutCloseAutoFocus = (event: Event) => {
     event.preventDefault();
+    if (paymentOutcome) {
+      revealOutcome();
+      return;
+    }
     document.querySelector<HTMLElement>(`[data-plan-button="${checkoutTier}"]`)?.focus();
   };
 
@@ -145,27 +169,30 @@ const Pricing = () => {
           description: 'Choose your plan and pay with Pi cryptocurrency'
         }}
       />
-      <PaymentOutcomeBanner
-        isPolling={paymentPolling.isPolling}
-        // The row says completed before the plan is activated: no outcome until the payment has finished
-        isTerminal={paymentPolling.isTerminal && !isProcessingPayment}
-        terminalReason={paymentPolling.terminalReason}
-        paymentId={paymentPolling.paymentId}
-        retryDisabled={isPaymentLocked}
-        {...(lastAttemptedTier.current
-          ? {
-              onRetry: () => {
-                paymentPolling.reset();
-                handlePaidPlanClick(lastAttemptedTier.current!);
-              },
-            }
-          : {})}
-        outcome={paymentOutcome}
-        onDismiss={() => {
-          paymentPolling.reset();
-          dismissPaymentOutcome();
-        }}
-      />
+      {/* scroll-mt-16: clear of the sticky header (h-16) when scrolled into view */}
+      <div ref={outcomeRef} className="scroll-mt-16">
+        <PaymentOutcomeBanner
+          isPolling={paymentPolling.isPolling}
+          // The row says completed before the plan is activated: no outcome until the payment has finished
+          isTerminal={paymentPolling.isTerminal && !isProcessingPayment}
+          terminalReason={paymentPolling.terminalReason}
+          paymentId={paymentPolling.paymentId}
+          retryDisabled={isPaymentLocked}
+          {...(lastAttemptedTier.current
+            ? {
+                onRetry: () => {
+                  paymentPolling.reset();
+                  handlePaidPlanClick(lastAttemptedTier.current!);
+                },
+              }
+            : {})}
+          outcome={paymentOutcome}
+          onDismiss={() => {
+            paymentPolling.reset();
+            dismissPaymentOutcome();
+          }}
+        />
+      </div>
       <PricingSection
         title="Simple, transparent pricing"
         subtitle="Choose the plan that's right for you and explore Avante Maps with premium features."

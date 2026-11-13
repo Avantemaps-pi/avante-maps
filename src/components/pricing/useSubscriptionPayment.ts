@@ -20,6 +20,27 @@ export type PaymentOutcome = 'not_completed' | 'not_enough_pi' | 'unconfirmed';
 // The wallet closed before anything was signed, so nothing was charged
 const WALLET_CLOSED_CODES = ['cancelled', 'insufficient_funds', 'wallet_error'];
 
+// The banner sits at the top of Pricing, often off screen: a toast says the same where the user is.
+// One id, so outcomes never stack
+const OUTCOME_TOAST_ID = 'payment:outcome';
+const showOutcomeToast = (outcome: PaymentOutcome) => {
+  // The generic "cancelled by user" toast never adds to this one
+  toast.dismiss('payment:cancelled');
+  if (outcome === 'unconfirmed') {
+    toast.warning(
+      "We couldn't confirm this payment yet. If Pi left your wallet, it will be credited automatically.",
+      { id: OUTCOME_TOAST_ID },
+    );
+  } else {
+    toast.info(
+      outcome === 'not_enough_pi'
+        ? 'Not enough Pi in your wallet. Nothing was charged.'
+        : 'Payment not completed. Nothing was charged.',
+      { id: OUTCOME_TOAST_ID },
+    );
+  }
+};
+
 // TODO(PiRC2): When the Pi Network PiRC2 subscription contract ships and
 // `FEATURE_FLAGS.pirc2Subscriptions` is enabled, route monthly renewals
 // through the contract (server-side cron + allowance) instead of the
@@ -133,15 +154,17 @@ export const useSubscriptionPayment = () => {
       ) {
         // Nothing was signed: the banner says so, and the plans can be chosen again at once
         polling.reset();
-        setPaymentOutcome(
+        const outcome: PaymentOutcome =
           result.errorCode === 'insufficient_funds'
             ? 'not_enough_pi'
-            : 'not_completed',
-        );
+            : 'not_completed';
+        setPaymentOutcome(outcome);
+        showOutcomeToast(outcome);
       } else if (result?.errorCode === 'timed_out') {
         // The 90 s limit: a late completion still credits, so no "nothing was charged" here
         polling.reset();
         setPaymentOutcome('unconfirmed');
+        showOutcomeToast('unconfirmed');
       } else if (result && result.success) {
         toast.success(result.message);
         if (result.shouldRefreshUser) {

@@ -157,7 +157,10 @@ export const PaymentOutcomeBanner: React.FC<PaymentOutcomeBannerProps> = ({
             className={`mt-0.5 h-5 w-5 shrink-0 ${iconToneClasses.pending}`}
           />
           <div className="flex-1">
-            <h3 className="text-sm font-medium">{title}</h3>
+            {/* Focusable, so Pricing can move focus here when the outcome appears */}
+            <h3 tabIndex={-1} className="text-sm font-medium outline-hidden">
+              {title}
+            </h3>
             {lines.map((line) => (
               <p key={line} className="mt-1 text-xs text-muted-foreground">
                 {line}
