@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { useNavigate } from '@/lib/router-compat';
+import { Link, useNavigate } from '@/lib/router-compat';
 import { Button } from '@/components/ui/button';
 import { X, UserRound, LogIn, LogOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -69,6 +69,12 @@ const MobileSidebar = ({
     navigate('/pricing');
     onClose();
   };
+
+  const footerLinks = [
+    { to: '/privacy', label: 'Privacy' },
+    { to: '/terms', label: 'Terms' },
+    { to: '/contact', label: 'Contact' },
+  ];
 
   const handleProfileClick = () => {
     navigate('/settings');
@@ -145,7 +151,30 @@ const MobileSidebar = ({
               </div>
             )}
           </div>
-          
+
+          {/* Same border, height and safe area as the bottom nav, so its top border lines up with the nav's */}
+          <footer
+            className="border-t border-border"
+            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          >
+            <div className="h-16 px-4 flex flex-col justify-center text-xs text-muted-foreground">
+              <div className="flex items-center gap-1.5">
+                {footerLinks.map((item, index) => (
+                  <React.Fragment key={item.to}>
+                    {index > 0 && <span aria-hidden="true">·</span>}
+                    <Link
+                      to={item.to}
+                      onClick={onLinkClick}
+                      className="inline-flex items-center min-h-6 rounded-sm hover:text-primary focus-visible:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    >
+                      {item.label}
+                    </Link>
+                  </React.Fragment>
+                ))}
+              </div>
+              <p>© {new Date().getFullYear()} Avante Maps Pty Ltd</p>
+            </div>
+          </footer>
         </div>
       </div>
     </>

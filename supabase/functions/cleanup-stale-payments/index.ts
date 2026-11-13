@@ -34,6 +34,7 @@ function isStalePayment(payment: any): boolean {
 
 const UNSIGNED_CANCEL_ERROR = 'Cancelled: not signed in the Pi wallet';
 const STALE_CANCEL_ERROR = 'Payment automatically cancelled due to staleness (>10 minutes old)';
+const NOT_FOUND_CANCEL_ERROR = 'Cancelled: not found at Pi';
 
 // One payment cancelled at Pi and in its row, but only when it's the caller's, still open, has no
 // txid, and Pi confirms nothing was signed. Used for the payment the wallet closed without signing
@@ -71,8 +72,47 @@ async function cancelUnsignedPayment(
     return { status: 200, body: { success: true, signed: true, txid: row.txid, message: 'Payment was signed', cleanedCount: 0 } };
   }
 
+  // Only while the row isn't completed: a completion can still arrive for this payment
+  const markCancelled = async (
+    error: string,
+  ): Promise<{ status: number; body: Record<string, unknown> }> => {
+    const { data: changed, error: updateError } = await supabaseClient
+      .from('payments')
+      .update({
+        status: {
+          approved: false,
+          verified: false,
+          completed: false,
+          cancelled: true,
+          error,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('payment_id', paymentId)
+      .eq('user_id', userId)
+      .eq('status->completed', false)
+      .select('payment_id');
+    if (updateError) {
+      console.error(`Error updating payment ${paymentId}:`, updateError);
+      return { status: 500, body: { success: false, message: 'Service temporarily unavailable' } };
+    }
+    const cleanedCount = changed?.length ?? 0;
+    return {
+      status: 200,
+      body: { success: true, cancelled: cleanedCount > 0, message: `Cancelled ${cleanedCount} unsigned payment`, cleanedCount },
+    };
+  };
+
   // Pi decides whether anything was signed, with the key of the app that has the payment
   const found = await piPayments.getPayment(paymentId);
+  // Neither app has it (both keys got a 404 payment_not_found) and our row has no txid: nothing at
+  // Pi to cancel or complete, so only our row is marked. Otherwise it came back every run. With one
+  // key set, the other app may have it: left open, as below
+  const bothApps = piPayments.apps.includes('testnet') && piPayments.apps.includes('mainnet');
+  if (!found.ok && found.reason === 'payment_not_found' && bothApps) {
+    console.log(`Payment ${paymentId} not found at Pi (pi_apps tried: ${piPayments.apps.join(', ')}): row cancelled`);
+    return await markCancelled(NOT_FOUND_CANCEL_ERROR);
+  }
   if (!found.ok) {
     console.log(`Pi Network lookup failed for ${paymentId} (pi_app ${found.app}):`, found.status ?? found.reason);
     return { status: 502, body: { success: false, message: 'Could not check the payment with Pi', cleanedCount: 0 } };
@@ -95,32 +135,7 @@ async function cancelUnsignedPayment(
     }
   }
 
-  // Only while the row isn't completed: a completion can still arrive for this payment
-  const { data: changed, error: updateError } = await supabaseClient
-    .from('payments')
-    .update({
-      status: {
-        approved: false,
-        verified: false,
-        completed: false,
-        cancelled: true,
-        error: errorText,
-      },
-      updated_at: new Date().toISOString(),
-    })
-    .eq('payment_id', paymentId)
-    .eq('user_id', userId)
-    .eq('status->completed', false)
-    .select('payment_id');
-  if (updateError) {
-    console.error(`Error updating payment ${paymentId}:`, updateError);
-    return { status: 500, body: { success: false, message: 'Service temporarily unavailable' } };
-  }
-  const cleanedCount = changed?.length ?? 0;
-  return {
-    status: 200,
-    body: { success: true, cancelled: cleanedCount > 0, message: `Cancelled ${cleanedCount} unsigned payment`, cleanedCount },
-  };
+  return await markCancelled(errorText);
 }
 
 Deno.serve(async (req) => {

@@ -136,15 +136,19 @@ test('both keys: each stale payment is cancelled in the app that has it', async 
   }
 });
 
-test('both keys, neither app has it: nothing cancelled at Pi, the row left for next time', async () => {
+// Before: left open with a 502, so it came back on every run
+test('both keys, neither app has it: nothing asked to cancel at Pi, the row marked "not found at Pi"', async () => {
   Deno.env.set('PI_MAINNET_API_KEY', MAINNET_KEY);
   try {
     const { fake, piCalls, status } = setup([stale('pay_gone')], {});
     const { json } = await call();
-    assertEquals(json.cleanedCount, 0);
+    assertEquals(json.cleanedCount, 1);
     assertEquals(piCalls, ['get pay_gone:testnet', 'get pay_gone:mainnet']);
     assert(!piCalls.some((c) => c.startsWith('cancel')));
-    assertEquals(status('pay_gone')['cancelled'], false);
+    assertEquals(
+      [status('pay_gone')['cancelled'], status('pay_gone')['error']],
+      [true, 'Cancelled: not found at Pi'],
+    );
     fake.restore();
   } finally {
     Deno.env.delete('PI_MAINNET_API_KEY');
@@ -422,5 +426,107 @@ test('paymentId of a row with a txid: { signed: true } with that txid, nothing a
   assertEquals([json.signed, json.txid], [true, 'tx_row']);
   assertEquals(piCalls, []);
   assertEquals(row('pay_row_tx')['status'], APPROVED);
+  fake.restore();
+});
+
+// ── Both keys, paymentId: a payment neither Pi app can find ──
+
+type PiAnswer = 'has_it' | 404 | 500;
+
+// Each app answers GET as given (404 is Pi's payment_not_found): calls recorded as "action id:app"
+function setupBothKeys(rows: Row[], answers: { testnet: PiAnswer; mainnet: PiAnswer }) {
+  const piCalls: string[] = [];
+  const fake = installFakeSupabase({
+    tables: { payments: rows },
+    users: { 'owner-token': OWNER },
+    external: (url, init) => {
+      if (url.host !== 'api.minepi.com') return undefined;
+      const key = (new Headers(init?.headers).get('authorization') ?? '').replace('Key ', '');
+      const app = key === MAINNET_KEY ? 'mainnet' : 'testnet';
+      const parts = url.pathname.split('/');
+      const isGet = init?.method === 'GET';
+      const id = isGet ? parts.pop()! : parts[parts.length - 2]!;
+      piCalls.push(`${isGet ? 'get' : parts.pop()} ${id}:${app}`);
+      const answer = answers[app];
+      if (answer === 404) {
+        return Response.json({ error: 'payment_not_found', error_message: 'Payment not found' }, { status: 404 });
+      }
+      if (answer === 500) return Response.json({ error: 'boom' }, { status: 500 });
+      return Response.json({ identifier: id, amount: 1, user_uid: 'pi-uid', status: PI_OPEN, transaction: null });
+    },
+  });
+  return {
+    fake,
+    piCalls,
+    row: (id: string) => fake.tables['payments']!.find((r) => r['payment_id'] === id)!,
+  };
+}
+
+const withBothKeys = async (fn: () => Promise<void>) => {
+  Deno.env.set('PI_MAINNET_API_KEY', MAINNET_KEY);
+  try {
+    await fn();
+  } finally {
+    Deno.env.delete('PI_MAINNET_API_KEY');
+  }
+};
+
+test('both keys return 404 for the paymentId: the row cancelled "not found at Pi", 200, no cancel at Pi', () =>
+  withBothKeys(async () => {
+    const { fake, piCalls, row } = setupBothKeys([approvedNow('pay_nf')], { testnet: 404, mainnet: 404 });
+    const { status, json } = await callOne('pay_nf');
+    assertEquals(status, 200);
+    assertEquals([json.success, json.cancelled, json.cleanedCount], [true, true, 1]);
+    assertEquals(piCalls, ['get pay_nf:testnet', 'get pay_nf:mainnet']);
+    const s = row('pay_nf')['status'] as Row;
+    assertEquals([s['cancelled'], s['completed'], s['error']], [true, false, 'Cancelled: not found at Pi']);
+    fake.restore();
+  }));
+
+test('one key returns 404 and the other 500: left open, 502', () =>
+  withBothKeys(async () => {
+    const { fake, piCalls, row } = setupBothKeys([approvedNow('pay_half')], { testnet: 404, mainnet: 500 });
+    const { status, json } = await callOne('pay_half');
+    assertEquals([status, json.cleanedCount], [502, 0]);
+    assertEquals(piCalls, ['get pay_half:testnet', 'get pay_half:mainnet']);
+    assertEquals(row('pay_half')['status'], APPROVED);
+    fake.restore();
+  }));
+
+test('the first key returns 500: no second lookup, left open, 502', () =>
+  withBothKeys(async () => {
+    const { fake, piCalls, row } = setupBothKeys([approvedNow('pay_down2')], { testnet: 500, mainnet: 404 });
+    const { status } = await callOne('pay_down2');
+    assertEquals(status, 502);
+    assertEquals(piCalls, ['get pay_down2:testnet']);
+    assertEquals(row('pay_down2')['status'], APPROVED);
+    fake.restore();
+  }));
+
+test('a row with a txid is never touched, even when neither app has the payment', () =>
+  withBothKeys(async () => {
+    const { fake, piCalls, row } = setupBothKeys(
+      [
+        { ...approvedNow('pay_tx_nf'), txid: 'tx_row' },
+        staleApproved('pay_tx_nf_stale', { txid: 'tx_row2' }),
+      ],
+      { testnet: 404, mainnet: 404 },
+    );
+    const one = await callOne('pay_tx_nf');
+    assertEquals([one.status, one.json.signed, one.json.cleanedCount], [200, true, 0]);
+    const all = await call();
+    assertEquals(all.json.cleanedCount, 0);
+    assertEquals(piCalls, []);
+    assertEquals(row('pay_tx_nf')['status'], APPROVED);
+    assertEquals(row('pay_tx_nf_stale')['status'], APPROVED);
+    fake.restore();
+  }));
+
+test('only PI_API_KEY set, and it returns 404 payment_not_found: the row not changed, 502', async () => {
+  const { fake, piCalls, row } = setupBothKeys([approvedNow('pay_one_key')], { testnet: 404, mainnet: 404 });
+  const { status, json } = await callOne('pay_one_key');
+  assertEquals([status, json.cleanedCount], [502, 0]);
+  assertEquals(piCalls, ['get pay_one_key:testnet']);
+  assertEquals(row('pay_one_key')['status'], APPROVED);
   fake.restore();
 });
