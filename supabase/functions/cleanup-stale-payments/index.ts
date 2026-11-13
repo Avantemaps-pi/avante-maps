@@ -105,9 +105,11 @@ async function cancelUnsignedPayment(
 
   // Pi decides whether anything was signed, with the key of the app that has the payment
   const found = await piPayments.getPayment(paymentId);
-  // No configured app has it (every key got a 404 payment_not_found) and our row has no txid:
-  // nothing at Pi to cancel or complete, so only our row is marked. Otherwise it came back every run
-  if (!found.ok && found.reason === 'payment_not_found') {
+  // Neither app has it (both keys got a 404 payment_not_found) and our row has no txid: nothing at
+  // Pi to cancel or complete, so only our row is marked. Otherwise it came back every run. With one
+  // key set, the other app may have it: left open, as below
+  const bothApps = piPayments.apps.includes('testnet') && piPayments.apps.includes('mainnet');
+  if (!found.ok && found.reason === 'payment_not_found' && bothApps) {
     console.log(`Payment ${paymentId} not found at Pi (pi_apps tried: ${piPayments.apps.join(', ')}): row cancelled`);
     return await markCancelled(NOT_FOUND_CANCEL_ERROR);
   }

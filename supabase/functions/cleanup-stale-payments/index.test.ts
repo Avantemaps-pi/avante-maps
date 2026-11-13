@@ -521,3 +521,12 @@ test('a row with a txid is never touched, even when neither app has the payment'
     assertEquals(row('pay_tx_nf_stale')['status'], APPROVED);
     fake.restore();
   }));
+
+test('only PI_API_KEY set, and it returns 404 payment_not_found: the row not changed, 502', async () => {
+  const { fake, piCalls, row } = setupBothKeys([approvedNow('pay_one_key')], { testnet: 404, mainnet: 404 });
+  const { status, json } = await callOne('pay_one_key');
+  assertEquals([status, json.cleanedCount], [502, 0]);
+  assertEquals(piCalls, ['get pay_one_key:testnet']);
+  assertEquals(row('pay_one_key')['status'], APPROVED);
+  fake.restore();
+});
