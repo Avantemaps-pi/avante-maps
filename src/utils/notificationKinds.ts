@@ -30,6 +30,7 @@ export type NotificationKind =
   | 'certified'
   | 'new_review'
   | 'topup_received'
+  | 'balance_paid'
   | 'plan_paid'
   | 'plan_not_activated'
   | 'business_registered'
@@ -79,6 +80,12 @@ const KINDS: Record<NotificationKind, KindConfig> = {
   },
   new_review: { icon: Star, tint: 'primary', defaultAction: 'See review' },
   topup_received: {
+    icon: Wallet,
+    tint: 'primary',
+    defaultAction: 'Open wallet',
+  },
+  // Paid from the Avante Maps balance (not a plan): the wallet, like a top up
+  balance_paid: {
     icon: Wallet,
     tint: 'primary',
     defaultAction: 'Open wallet',

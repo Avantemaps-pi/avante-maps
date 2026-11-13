@@ -878,3 +878,30 @@ test('a narrower screen can make a notice expandable: measured again on resize',
   await page.setViewportSize({ width: 280, height: 800 });
   await expect(chevron(page, 'plan_paid')).toHaveCount(1);
 });
+
+// A payment from the balance that isn't a plan: the wallet icon, as for a top up (was the bell)
+test('balance_paid shows the wallet icon, blue, with Open wallet', async ({
+  page,
+}) => {
+  const balancePaid: Fixture = {
+    kind: 'balance_paid',
+    tint: 'primary',
+    tab: 'account',
+    name: 'Avante Maps',
+    content: '16.40 π was paid from your Avante Maps balance.',
+    action: 'Open wallet',
+    url: '/wallet',
+  };
+  await setup(page, [kindRow(balancePaid, 0)]);
+  await open(page);
+  const r = row(page, 'balance_paid');
+  await expect(r.locator('[data-tint]')).toHaveAttribute(
+    'data-tint',
+    'primary',
+  );
+  await expect(r.locator('svg.lucide-wallet')).toHaveCount(1);
+  await expect(r.locator('svg.lucide-bell')).toHaveCount(0);
+  await expect(
+    r.getByRole('link', { name: 'Open wallet', exact: true }),
+  ).toHaveAttribute('href', '/wallet');
+});

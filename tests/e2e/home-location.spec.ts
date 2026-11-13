@@ -457,3 +457,103 @@ test('a copy saved by an earlier version is removed on first use, and not used',
     .toContainEqual(IP);
   expect(await centers(page)).not.toContainEqual({ lat: 1.5, lng: 2.5 });
 });
+
+// Switching accounts on one device (no reload): the second account never sees the first's home,
+// which was cached under the same key
+test("two users on one device: after switching, Settings shows the new user's home, not the previous one's", async ({
+  page,
+}) => {
+  const USER_A = '00000000-0000-0000-0000-0000000000a1';
+  // The sandbox login's user (DEV_CONFIG.mockUser), with no home position
+  const USER_B = mockUser.uid;
+  const sessionFor = (sub: string) => ({
+    ...session,
+    access_token: `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub, exp: EXP, role: 'authenticated', aud: 'authenticated' })}.sig`,
+    user: { ...session.user, id: sub },
+  });
+  await setup(page, { gps: 'denied' });
+  const rows: Record<string, HomeRow> = {
+    [USER_A]: {
+      home_lat: HOME.lat,
+      home_lng: HOME.lng,
+      home_set_at: '2026-11-11T10:00:00Z',
+    },
+    [USER_B]: {
+      home_lat: null,
+      home_lng: null,
+      home_set_at: '2026-11-12T10:00:00Z',
+    },
+  };
+  const homeReads: string[] = [];
+  await page.route('**/rest/v1/users*', (route) => {
+    const url = new URL(route.request().url());
+    const select = url.searchParams.get('select') ?? '';
+    if (!select.includes('home_set_at')) return route.fulfill({ json: [] });
+    const id = (url.searchParams.get('id') ?? '').replace('eq.', '');
+    homeReads.push(id);
+    return route.fulfill({ json: rows[id] ? [rows[id]] : [] });
+  });
+  // Signed in as A: the sandbox session's cached user and the Supabase session both say A
+  await page.addInitScript(
+    ([a, s]) => {
+      const cached = JSON.parse(
+        localStorage.getItem('avante_maps_auth') ?? '{}',
+      );
+      localStorage.setItem(
+        'avante_maps_auth',
+        JSON.stringify({ ...cached, uid: a, lastAuthenticated: Date.now() }),
+      );
+      localStorage.setItem('supabase.auth.token', JSON.stringify(s));
+    },
+    [USER_A, sessionFor(USER_A)] as const,
+  );
+  const goInApp = (path: string) =>
+    page.evaluate((to) => {
+      window.history.pushState({}, '', to);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, path);
+
+  await page.goto('/settings');
+  const homeRow = (state: 'Set' | 'Not set') =>
+    page.getByRole('button', { name: `Home location: ${state}` });
+  await expect(async () => {
+    if (!(await homeRow('Set').isVisible()))
+      await page.getByRole('button', { name: /Appearance/ }).click();
+    await expect(homeRow('Set')).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
+  expect(homeReads).toContain(USER_A);
+
+  // Log out, then sign in as B in the same page. Logout is done once it says so: it clears the
+  // Supabase keys after signing out, so B's session is written only then
+  const loggedOut = page.getByText("You've been logged out");
+  await expect(async () => {
+    if (await loggedOut.isVisible()) return;
+    const logout = page.getByRole('button', { name: 'Logout' });
+    // The closed menu is only moved off screen, so "visible" isn't enough: it must be in view
+    const onScreen = await expect(logout)
+      .toBeInViewport({ timeout: 500 })
+      .then(() => true)
+      .catch(() => false);
+    if (!onScreen)
+      await page.getByRole('button', { name: 'Open menu' }).first().tap();
+    await expect(logout).toBeInViewport({ timeout: 1_000 });
+    await logout.tap({ timeout: 1_000 });
+    await expect(loggedOut).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 20_000 });
+  await page.evaluate(
+    (s) => localStorage.setItem('supabase.auth.token', JSON.stringify(s)),
+    sessionFor(USER_B),
+  );
+  await goInApp('/registration');
+  await page.getByRole('button', { name: 'Continue as sandbox user' }).click();
+  await expect(page).toHaveURL(/localhost:\d+\/$/);
+
+  await goInApp('/settings');
+  await expect(async () => {
+    if (!(await homeRow('Not set').isVisible()))
+      await page.getByRole('button', { name: /Appearance/ }).click();
+    await expect(homeRow('Not set')).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
+  await expect(homeRow('Set')).toHaveCount(0);
+  expect(homeReads).toContain(USER_B);
+});

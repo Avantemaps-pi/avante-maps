@@ -195,15 +195,22 @@ export const useBusinessUpdate = (business: Business) => {
 
       if (Object.keys(payload).length === 0) return null;
 
-      const { error: updateError } = await supabase
+      const { data: savedRows, error: updateError } = await supabase
         .from('businesses')
         .update(payload)
         .eq('id', business.id)
-        .eq('owner_id', sessionUserId);
+        .eq('owner_id', sessionUserId)
+        .select('id');
 
       if (updateError) {
         secureLog.error('Error updating business', { businessId: business.id, section, error: updateError });
         toast.error(`Failed to update business: ${updateError.message}`);
+        return null;
+      }
+      // An update RLS lets through as a no-op (0 rows) saved nothing
+      if (!savedRows || savedRows.length === 0) {
+        secureLog.warn('Business update changed no rows', { businessId: business.id, section });
+        toast.error("Couldn't save. Reopen the business and try again.");
         return null;
       }
 

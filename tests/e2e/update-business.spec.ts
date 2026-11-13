@@ -57,7 +57,8 @@ async function setup(page: Page, row: Record<string, unknown> = ROW, geocoder: '
     const req = route.request();
     if (req.method() === 'PATCH') {
       patches.push(req.postDataJSON() as Record<string, unknown>);
-      return route.fulfill({ status: 204, body: '' });
+      // The updated row's id, as PostgREST returns it for .select('id')
+      return route.fulfill({ json: [{ id: ID }] });
     }
     const url = new URL(req.url());
     gets.push(url.search);
@@ -233,6 +234,28 @@ test('Hours: only the hours fields; Save → toast → the overview with the new
   // Back from the overview leaves Edit listing: the section isn't left in the history
   await page.getByRole('button', { name: 'Go back' }).tap();
   await page.waitForURL('**/registered-business');
+});
+
+// An update RLS lets through as a no-op changes 0 rows: that's a failure, not "Saved"
+test('a save that changes no rows (refused by RLS): the error toast, no "saved", still on the section', async ({
+  page,
+}) => {
+  const { patches } = await setup(page);
+  await page.route('**/rest/v1/businesses*', (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    patches.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.fulfill({ json: [] });
+  });
+  await fromList(page);
+  await openSection(page, 'Hours', 'hours');
+  await page.locator('input[type="time"]').nth(2).fill('08:00');
+  await save(page).tap();
+  await expect(
+    page.getByText("Couldn't save. Reopen the business and try again."),
+  ).toBeVisible();
+  await expect(page.getByText('Hours saved')).toHaveCount(0);
+  expect(patches).toHaveLength(1);
+  expect(path(page)).toBe(`${overviewUrl}/hours`);
 });
 
 test('a reload on a section route stays on that section', async ({ page }) => {
