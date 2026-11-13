@@ -92,3 +92,39 @@ test('og-image.png is a 1200x630 PNG, and the page says so', async ({ page, requ
   await expect(page.locator('meta[property="og:image:width"]').first()).toHaveAttribute('content', '1200');
   await expect(page.locator('meta[property="og:image:height"]').first()).toHaveAttribute('content', '630');
 });
+
+// ---- Privacy, cookies and contact
+
+test('Privacy Policy: support@avantemaps.com, the real processors, and no "Pi Network and other partners"', async ({ page }) => {
+  await setup(page);
+  await page.goto('/privacy');
+  const policy = page.locator('main');
+  await expect(policy.getByText('Effective Date:')).toBeVisible();
+  await expect(policy).toContainText('November 13, 2026');
+  await expect(policy).toContainText('Avante Maps Pty Ltd');
+  await expect(policy).toContainText('support@avantemaps.com');
+  for (const processor of ['Supabase', 'Vercel', 'Brevo', 'Lovable AI gateway', 'ipwho.is', 'ipapi.co', 'geojs.io', 'OpenStreetMap']) {
+    await expect(policy).toContainText(processor);
+  }
+  await expect(policy).toContainText("We don't sell your data.");
+  await expect(policy).not.toContainText(/other partners|Business Partners/i);
+  await expect(policy).not.toContainText('privacy@avantemaps.com');
+  await expect(policy).not.toContainText(/Name, email, phone/);
+});
+
+test('Cookie Policy: no advertising or tracking cookies, and support@avantemaps.com', async ({ page }) => {
+  await setup(page);
+  await page.goto('/cookies');
+  const policy = page.locator('main');
+  await expect(policy).toContainText('uses no advertising cookies');
+  await expect(policy).toContainText('Your own location is never saved in your browser');
+  await expect(policy).toContainText('support@avantemaps.com');
+  await expect(policy.getByRole('heading', { name: /Advertising Cookies|Social Media Cookies|Web Beacons/ })).toHaveCount(0);
+});
+
+test('Contact: support@avantemaps.com shown, no partnerships@ mailbox', async ({ page }) => {
+  await setup(page);
+  await page.goto('/contact');
+  await expect(page.getByText('support@avantemaps.com', { exact: true })).toBeVisible();
+  await expect(page.locator('body')).not.toContainText(/partnerships@|inquiries@avantemaps\.com/);
+});

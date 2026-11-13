@@ -83,8 +83,8 @@ const Contact = () => {
                 <Mail className="h-5 w-5 text-primary" />
                 <h3 className="text-lg font-medium">Email</h3>
               </div>
-              <p className="text-sm break-all">inquiries@avantemaps.com</p>
-              <p className="text-xs text-muted-foreground mt-1">For general inquiries</p>
+              <p className="text-sm break-all">support@avantemaps.com</p>
+              <p className="text-xs text-muted-foreground mt-1">For questions and support</p>
             </div>
 
             <div className="p-4 sm:p-6">
@@ -140,7 +140,6 @@ const Contact = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="inquiries@avantemaps.com">Inquiries</SelectItem>
-                    <SelectItem value="partnerships@avantemaps.com">Partnerships</SelectItem>
                     <SelectItem value="support@avantemaps.com">Support</SelectItem>
                     <SelectItem value="businesses@avantemaps.com">Businesses</SelectItem>
                   </SelectContent>

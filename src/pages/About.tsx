@@ -137,7 +137,7 @@ const About = () => {
               </a>
             </Button>
             <Button variant="outline" className="rounded-full" size="icon" asChild>
-              <a href="mailto:inquiries@avantemaps.com" aria-label="Email">
+              <a href="mailto:support@avantemaps.com" aria-label="Email">
                 <Mail className="h-5 w-5" />
               </a>
             </Button>
