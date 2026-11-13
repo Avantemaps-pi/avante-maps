@@ -17,6 +17,7 @@ import { AuthProvider } from "@/context/auth";
 import { useSessionRestoration } from "@/hooks/useSessionRestoration";
 import { SessionManager } from "@/components/session/SessionManager";
 import { PendingConversationDispatcher } from "@/components/session/PendingConversationDispatcher";
+import { StalePaymentCleanup } from "@/components/session/StalePaymentCleanup";
 import AuthenticatingOverlay from "@/components/auth/AuthenticatingOverlay";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/pages/NotFound";
@@ -325,6 +326,7 @@ function RootComponent() {
                 <SessionRestoration />
                 <SessionManager />
                 <PendingConversationDispatcher />
+                <StalePaymentCleanup />
                 <Toaster />
                 <Sonner />
                 <Suspense fallback={<PageLoader />}>

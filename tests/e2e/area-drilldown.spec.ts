@@ -11,8 +11,8 @@ import { test, expect, type Page } from './helpers/fixtures';
 import { AREA_FIXTURES, areaCentre, mockMap, NEARBY_BUSINESSES, pin, zoomToPins, CENTRE } from './helpers/mapMocks';
 
 test.use({ viewport: { width: 375, height: 812 }, hasTouch: true, isMobile: true });
-// Also set in playwright.config.ts. Kept here so a failed run of "List · N" always has its trace:
-// it times out waiting for the first pin in long full-suite runs only (see waitForFirstPin)
+// Also set in playwright.config.ts. Kept here so a failed run always has its trace. "List · N" used to
+// time out waiting for the first pin in long runs: the IP focus raced it (see openMapOverTestland)
 test.use({ trace: 'retain-on-failure' });
 
 const COUNTRY = AREA_FIXTURES[0]!;
@@ -92,6 +92,11 @@ async function waitForFirstPin(page: Page, businessesResolved: () => boolean, ti
 
 async function openMapOverTestland(page: Page, rows: object[] = NEARBY_BUSINESSES, pinTimeout?: number) {
   await mockMap(page, rows, { areas: AREA_FIXTURES });
+  // No automatic focus on the IP location (CENTRE, zoom 14). It fired ~400 ms after the home read
+  // settled, which varies with load: before the first pin it hid Testland's pins (only those on
+  // screen are drawn), after centreMap it moved the map from under the taps. The flag is what the
+  // app sets once it has focused in this browser session
+  await page.addInitScript(() => sessionStorage.setItem('ip_location_focused', '1'));
   let businessesResolved = false;
   page.on('response', (response) => {
     if (response.url().includes('/rest/v1/rpc/get_public_business_info')) businessesResolved = true;

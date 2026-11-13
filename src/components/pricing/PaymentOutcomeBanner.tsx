@@ -6,9 +6,11 @@ import {
   XCircle,
   AlertTriangle,
   Clock,
+  Info,
   Loader2,
 } from 'lucide-react';
 import type { TerminalReason } from '@/hooks/usePaymentStatusPolling';
+import type { PaymentOutcome } from './useSubscriptionPayment';
 
 interface PaymentOutcomeBannerProps {
   isPolling: boolean;
@@ -21,6 +23,8 @@ interface PaymentOutcomeBannerProps {
   onDismiss?: () => void;
   /** Disable retry while another action is in flight. */
   retryDisabled?: boolean;
+  /** A plan payment that ended without being completed (nothing signed, or no result in time) */
+  outcome?: PaymentOutcome | null;
 }
 
 interface OutcomeMeta {
@@ -75,6 +79,28 @@ const OUTCOMES: Record<TerminalReason, OutcomeMeta> = {
   },
 };
 
+// Neutral: the wallet closed before signing (nothing charged), or no result within the 90 s limit
+const NOT_COMPLETED: Record<
+  PaymentOutcome,
+  { title: string; lines: string[] }
+> = {
+  not_completed: {
+    title: 'Payment not completed',
+    lines: ['Nothing was charged. You can try again.'],
+  },
+  not_enough_pi: {
+    title: 'Payment not completed',
+    lines: [
+      'Nothing was charged. You can try again.',
+      'Not enough Pi in your wallet.',
+    ],
+  },
+  unconfirmed: {
+    title: "We couldn't confirm this payment yet",
+    lines: ['If Pi left your wallet, it will be credited automatically.'],
+  },
+};
+
 const toneClasses: Record<OutcomeMeta['tone'], string> = {
   success: 'border-primary/30 bg-accent text-accent-foreground',
   pending: 'border-input bg-muted text-foreground',
@@ -97,6 +123,7 @@ export const PaymentOutcomeBanner: React.FC<PaymentOutcomeBannerProps> = ({
   onRetry,
   onDismiss,
   retryDisabled,
+  outcome,
 }) => {
   // Active polling state — show a non-dismissible "in progress" indicator.
   if (isPolling && !isTerminal) {
@@ -114,6 +141,34 @@ export const PaymentOutcomeBanner: React.FC<PaymentOutcomeBannerProps> = ({
               <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
                 {paymentId}
               </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (outcome) {
+    const { title, lines } = NOT_COMPLETED[outcome];
+    return (
+      <Card role="status" className={`mb-4 ${toneClasses.pending}`}>
+        <CardContent className="flex items-start gap-3 p-4">
+          <Info
+            className={`mt-0.5 h-5 w-5 shrink-0 ${iconToneClasses.pending}`}
+          />
+          <div className="flex-1">
+            <h3 className="text-sm font-medium">{title}</h3>
+            {lines.map((line) => (
+              <p key={line} className="mt-1 text-xs text-muted-foreground">
+                {line}
+              </p>
+            ))}
+            {onDismiss && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" variant="ghost" onClick={onDismiss}>
+                  Dismiss
+                </Button>
+              </div>
             )}
           </div>
         </CardContent>

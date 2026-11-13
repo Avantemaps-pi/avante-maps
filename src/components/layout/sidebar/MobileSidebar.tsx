@@ -1,13 +1,12 @@
 
 import React from 'react';
-import { Link, useNavigate } from '@/lib/router-compat';
+import { useNavigate } from '@/lib/router-compat';
 import { Button } from '@/components/ui/button';
 import { X, UserRound, LogIn, LogOut } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import NavItem from './NavItem';
 import { useAuth } from '@/context/auth';
 import { cn } from '@/lib/utils';
-import { legalItems } from './sidebarConfig';
 import { getInitials } from '@/lib/getInitials';
 
 interface MobileSidebarProps {
@@ -147,36 +146,6 @@ const MobileSidebar = ({
             )}
           </div>
           
-          {/* Compact Footer */}
-          <div className="px-4 py-3 border-t border-sidebar-border bg-muted/30 space-y-2">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-              <Link 
-                to="/pricing" 
-                onClick={onLinkClick}
-                className="hover:text-primary transition-colors font-medium"
-              >
-                Pricing
-              </Link>
-              <span className="text-border">·</span>
-              {legalItems.map((item, index, arr) => (
-                <React.Fragment key={item.to}>
-                  <Link 
-                    to={item.to} 
-                    onClick={onLinkClick}
-                    className="hover:text-primary transition-colors"
-                  >
-                    {item.label}
-                  </Link>
-                  {index < arr.length - 1 && (
-                    <span className="text-border">·</span>
-                  )}
-                </React.Fragment>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              © {new Date().getFullYear()} Avante Maps Pty Ltd
-            </p>
-          </div>
         </div>
       </div>
     </>

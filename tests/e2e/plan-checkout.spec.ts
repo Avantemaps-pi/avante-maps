@@ -45,12 +45,15 @@ async function setup(
     approvalCalls?: number;
     /** Once pay-from-balance has succeeded: the balance, and the wallet_ledger rows */
     afterPay?: { balance: number; ledger: object[] };
+    /** After approval the wallet closes without signing: the user cancels, or the SDK's error */
+    walletCloses?: 'cancel' | { error: string };
   } = {},
 ) {
   const payCalls: { body: Record<string, unknown>; headers: Record<string, string> }[] = [];
   const balances: unknown[] = [];
   const approveCalls: Record<string, unknown>[] = [];
   const completeCalls: Record<string, unknown>[] = [];
+  const cleanupCalls: Record<string, unknown>[] = [];
   const price = { usd: PRICE_USD };
   let releasePay = () => {};
   const payHeld = new Promise<void>((resolve) => (releasePay = resolve));
@@ -72,6 +75,10 @@ async function setup(
     completeCalls.push(route.request().postDataJSON() as Record<string, unknown>);
     const answer = options.complete ?? PIPELINE_OK;
     return route.fulfill({ status: answer.status, json: answer.json });
+  });
+  await page.route('**/functions/v1/cleanup-stale-payments', (route) => {
+    cleanupCalls.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.fulfill({ json: { success: true, message: 'ok', cleanedCount: 1, cancelled: true } });
   });
   await page.route('**/functions/v1/payment-status', (route) =>
     route.fulfill({ json: { success: true, status: options.rowStatus ?? { approved: true, completed: false, cancelled: false } } }),
@@ -97,13 +104,15 @@ async function setup(
   });
   await page.addInitScript((s) => localStorage.setItem('supabase.auth.token', JSON.stringify(s)), session);
   await page.addInitScript(
-    ({ runCallbacks, approvalFails, approvalCalls }) => {
+    ({ runCallbacks, approvalFails, approvalCalls, walletCloses }) => {
       const w = window as unknown as { Pi: object; __piInitialized: boolean; __piPayments: unknown[] };
       w.__piPayments = [];
       w.__piInitialized = true;
       type Callbacks = {
         onReadyForServerApproval: (id: string) => Promise<void>;
         onReadyForServerCompletion: (id: string, txid: string) => Promise<void>;
+        onCancel: (id: string) => void;
+        onError: (error: Error, payment?: object) => void;
       };
       w.Pi = {
         init: () => undefined,
@@ -116,6 +125,15 @@ async function setup(
               callbacks.onReadyForServerApproval('pid-1'),
             );
             await Promise.all(approvals);
+            // The wallet closes unsigned, as with too little Pi: approved, but never a transaction
+            if (walletCloses === 'cancel') return callbacks.onCancel('pid-1');
+            if (walletCloses) {
+              return callbacks.onError(new Error(walletCloses.error), {
+                identifier: 'pid-1',
+                status: { developer_approved: true, transaction_verified: false, developer_completed: false, cancelled: false, user_cancelled: false },
+                transaction: null,
+              });
+            }
             // A refused approval never reaches signing
             if (!approvalFails) await callbacks.onReadyForServerCompletion('pid-1', 'abc123');
           })();
@@ -123,12 +141,13 @@ async function setup(
       };
     },
     {
-      runCallbacks: options.approve !== undefined || options.complete !== undefined,
+      runCallbacks: options.approve !== undefined || options.complete !== undefined || options.walletCloses !== undefined,
       approvalFails: typeof options.approve === 'object' && options.approve.status !== 200,
       approvalCalls: options.approvalCalls ?? 1,
+      walletCloses: options.walletCloses ?? null,
     },
   );
-  return { payCalls, balances, releasePay, approveCalls, completeCalls, price };
+  return { payCalls, balances, releasePay, approveCalls, completeCalls, cleanupCalls, price };
 }
 
 const piPayments = (page: Page) =>
@@ -528,8 +547,9 @@ test('sizes and selected row: 44px Close, 64px rows, 2px primary border on the s
   expect(noSideways).toBe(true);
 });
 
-// Pi's approval window is 60 s: with no callback at all, the plan payment ends after 90 s (#174)
-test('Pi never calls back: after 90 s the payment times out with the message, and the plan can be chosen again', async ({
+// Pi's approval window is 60 s: with no callback at all, the plan payment ends after 90 s (#174). A
+// late completion still credits, so the banner doesn't say nothing was charged
+test('Pi never calls back: after 90 s the "couldn\'t confirm" banner, and the plan can be chosen again', async ({
   page,
 }) => {
   await page.clock.install();
@@ -543,8 +563,16 @@ test('Pi never calls back: after 90 s the payment times out with the message, an
 
   await page.clock.fastForward('01:31');
   await expect(
-    page.getByText('The payment timed out. No Pi was taken. Please try again.'),
+    page.getByText("We couldn't confirm this payment yet"),
   ).toBeVisible();
+  await expect(
+    page.getByText(
+      'If Pi left your wallet, it will be credited automatically.',
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Nothing was charged. You can try again.'),
+  ).toHaveCount(0);
   await expect(planButton(page)).toBeEnabled();
 });
 
@@ -598,10 +626,10 @@ test('after paying from the balance, the Wallet shows the reduced balance and th
   await expect(async () => {
     await page.getByRole('button', { name: 'Open menu' }).tap();
     await expect(
-      page.getByRole('link', { name: 'Pricing', exact: true }),
+      page.getByRole('link', { name: 'Plans and pricing', exact: true }),
     ).toBeVisible({ timeout: 1_000 });
   }).toPass({ timeout: 15_000 });
-  await page.getByRole('link', { name: 'Pricing', exact: true }).tap();
+  await page.getByRole('link', { name: 'Plans and pricing', exact: true }).tap();
   await page.waitForURL('**/pricing');
   await expect(page.getByText('π 65.19')).toBeVisible();
   await planButton(page).tap();
@@ -618,4 +646,170 @@ test('after paying from the balance, the Wallet shows the reduced balance and th
   await expect(row).toContainText('Small Business plan');
   await expect(row).toContainText('Plan · Paid from balance');
   await expect(row).toContainText('− 65.19 π');
+});
+
+// 13 Nov: the wallet said "not enough funds" and closed, and the approved payment stayed Pending until
+// the stale cleanup ran. Now it's cancelled at once, by its id
+test('the wallet cancels after approval: cleanup-stale-payments is called once with that paymentId', async ({
+  page,
+}) => {
+  const { cleanupCalls, completeCalls } = await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    walletCloses: 'cancel',
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  await expect
+    .poll(() => cleanupCalls.filter((body) => body['paymentId']).length)
+    .toBe(1);
+  expect(cleanupCalls.find((body) => body['paymentId'])).toEqual({
+    userId: mockUser.uid,
+    paymentId: 'pid-1',
+  });
+  // Once only, and nothing to complete
+  await page.waitForTimeout(1000);
+  expect(cleanupCalls.filter((body) => body['paymentId'])).toHaveLength(1);
+  expect(completeCalls).toEqual([]);
+});
+
+test('the wallet errors with not enough funds after approval: cleanup-stale-payments gets that paymentId once', async ({
+  page,
+}) => {
+  const { cleanupCalls } = await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    walletCloses: { error: 'Insufficient funds' },
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  await expect
+    .poll(() => cleanupCalls.filter((body) => body['paymentId']).length)
+    .toBe(1);
+  expect(cleanupCalls.find((body) => body['paymentId'])!['paymentId']).toBe(
+    'pid-1',
+  );
+});
+
+test('a signed payment never goes to cleanup-stale-payments by its id', async ({
+  page,
+}) => {
+  const { cleanupCalls, completeCalls } = await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    complete: PIPELINE_OK,
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  await expect.poll(() => completeCalls.length).toBe(1);
+  await page.waitForTimeout(1000);
+  expect(cleanupCalls.filter((body) => body['paymentId'])).toEqual([]);
+});
+
+test('the plain cleanup runs once when the app opens on Pricing, not again within 5 minutes in the same tab', async ({
+  page,
+}) => {
+  const { cleanupCalls } = await setup(page, { balance: 3.2 });
+  await openPricing(page);
+  // The app start and Pricing share the throttle: one call between them
+  await expect.poll(() => cleanupCalls.length).toBe(1);
+  expect(cleanupCalls[0]).toEqual({ userId: mockUser.uid });
+
+  // Away and back to Pricing in the app, without a reload (the router follows popstate)
+  const goInApp = (path: string) =>
+    page.evaluate((to) => {
+      window.history.pushState({}, '', to);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, path);
+  await goInApp('/about');
+  await expect(page.getByText('π 65.19')).toHaveCount(0);
+  await goInApp('/pricing');
+  await expect(page.getByText('π 65.19')).toBeVisible();
+  await page.waitForTimeout(1000);
+  expect(cleanupCalls).toHaveLength(1);
+});
+
+// 13 Nov: after the wallet's "not enough funds", Pricing stayed on "Confirming payment…" with the
+// button on "Processing…"
+test('the wallet errors with not enough funds: "Payment not completed" with the funds line, buttons usable, no Confirming', async ({
+  page,
+}) => {
+  await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    walletCloses: { error: 'Insufficient funds' },
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  const banner = page
+    .getByRole('status')
+    .filter({ hasText: 'Payment not completed' });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('Nothing was charged. You can try again.');
+  await expect(banner).toContainText('Not enough Pi in your wallet.');
+  await expect(page.getByText('Confirming payment…')).toHaveCount(0);
+  await expect(page.getByText(/Processing/)).toHaveCount(0);
+  await expect(planButton(page)).toBeEnabled();
+  // Still nothing after the poller's interval
+  await page.waitForTimeout(3500);
+  await expect(page.getByText('Confirming payment…')).toHaveCount(0);
+
+  // Dismissible, and the plan can be chosen again
+  await banner.getByRole('button', { name: 'Dismiss' }).tap();
+  await expect(banner).toHaveCount(0);
+  await planButton(page).tap();
+  await expect(sheet(page)).toBeVisible();
+});
+
+test('the wallet cancels: "Payment not completed" without the funds line, buttons usable', async ({
+  page,
+}) => {
+  await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    walletCloses: 'cancel',
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  const banner = page
+    .getByRole('status')
+    .filter({ hasText: 'Payment not completed' });
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('Nothing was charged. You can try again.');
+  await expect(banner).not.toContainText('Not enough Pi');
+  await expect(page.getByText('Confirming payment…')).toHaveCount(0);
+  await expect(planButton(page)).toBeEnabled();
+});
+
+test('a signed payment shows "Confirming payment…" while it is completed', async ({
+  page,
+}) => {
+  let releaseComplete = () => {};
+  const held = new Promise<void>((resolve) => (releaseComplete = resolve));
+  await setup(page, {
+    balance: 3.2,
+    approve: PIPELINE_OK,
+    complete: PIPELINE_OK,
+  });
+  await page.route('**/functions/v1/complete-payment', async (route) => {
+    await held;
+    return route.fulfill({ json: PIPELINE_OK.json });
+  });
+  await openSheet(page);
+  await sheet(page)
+    .getByRole('button', { name: 'Continue in Pi Wallet' })
+    .tap();
+  await expect(page.getByText('Confirming payment…')).toBeVisible();
+  releaseComplete();
+  await expect(page.getByText(/Successfully subscribed/)).toBeVisible();
 });

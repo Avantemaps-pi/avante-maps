@@ -3,7 +3,8 @@
  * the real Supabase project: a request no mock handled would otherwise reach live data with the
  * tests' fake token, and pass or fail depending on what came back and when. Mock it instead.
  *
- * The unread-notifications count, which every page asks for, is answered here. The client error
+ * The unread-notifications count, which every page asks for, and the stale payment cleanup a
+ * signed-in app start runs, are answered here. The client error
  * log (log-error) deliberately isn't: it's only sent when the error boundary catches a crash, and
  * a test that crashes should fail with it named. A spec that truly needs a live request opts out by naming it, with a comment saying why:
  *   test.use({ allowLiveSupabase: ['HEAD /rest/v1/notifications'] });
@@ -36,6 +37,10 @@ export const test = base.extend<Options & { blockLiveSupabase: void }>({
         leaked.add(name);
         return route.abort('blockedbyclient');
       });
+      // The stale payment cleanup a signed-in app start runs: nothing to clean. A spec's own route wins
+      await context.route(`${SUPABASE_ORIGIN}/functions/v1/cleanup-stale-payments`, (route) =>
+        route.fulfill({ json: { success: true, message: 'No stale payments found', cleanedCount: 0 } }),
+      );
       // The unread count every page asks for, answered once here. A spec's own route wins
       await context.route(`${SUPABASE_ORIGIN}/rest/v1/notifications*`, (route) =>
         route.request().method() === 'HEAD'

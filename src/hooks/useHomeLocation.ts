@@ -3,6 +3,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/context/auth';
 import { getSessionUserId } from '@/lib/sessionUserId';
 
+// The prefix: each user's home is cached under it with their id, so switching accounts on one device
+// never shows the previous account's home. Invalidating the prefix covers every user
 export const HOME_LOCATION_QUERY_KEY = ['home-location'];
 
 export interface HomeLocation {
@@ -56,11 +58,12 @@ const writeHomeLocation = async (
 };
 
 export const useHomeLocation = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const queryClient = useQueryClient();
 
   const query = useQuery({
-    queryKey: HOME_LOCATION_QUERY_KEY,
+    // Only a cache key: the read itself uses the session's user id
+    queryKey: [...HOME_LOCATION_QUERY_KEY, user?.uid ?? null],
     queryFn: fetchHomeLocation,
     enabled: isAuthenticated,
     staleTime: 5 * 60 * 1000,

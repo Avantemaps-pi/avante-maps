@@ -426,6 +426,11 @@ test('opening a strip of 20 cards makes at most one bookmarks request', async ({
   await page.route('**/rest/v1/bookmarks*', (route) => route.fulfill({ json: [] }));
   await page.route('**/rest/v1/users*', (route) => route.fulfill({ json: [] }));
   await page.route('**/rest/v1/user_roles*', (route) => route.fulfill({ json: [] }));
+  // The unread-message badges a signed-in user loads: their conversations and owned businesses
+  await page.route('**/rest/v1/conversations*', (route) => route.fulfill({ json: [] }));
+  await page.route('**/rest/v1/businesses*', (route) =>
+    new URL(route.request().url()).searchParams.has('owner_id') ? route.fulfill({ json: [] }) : route.fallback(),
+  );
   await page.addInitScript((s) => localStorage.setItem('supabase.auth.token', JSON.stringify(s)), session);
 
   const many = Array.from({ length: 24 }, (_, i) => ({

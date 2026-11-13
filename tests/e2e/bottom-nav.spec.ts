@@ -260,7 +260,7 @@ test.describe('task pages and main destinations at 375x812', () => {
     await page.goto('/wallet');
     await expect(nav(page)).toBeVisible();
     await page.getByRole('button', { name: 'Open menu' }).first().tap();
-    await page.getByRole('link', { name: 'Pricing', exact: true }).tap();
+    await page.getByRole('link', { name: 'Plans and pricing', exact: true }).tap();
     await page.waitForURL('**/pricing');
     await back(page).tap();
     await page.waitForURL('**/wallet');

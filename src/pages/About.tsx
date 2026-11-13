@@ -143,7 +143,7 @@ const About = () => {
             </Button>
           </div>
           <p className="text-sm text-muted-foreground mt-4">
-            © 2026 Avante Maps. All rights reserved.
+            © {new Date().getFullYear()} Avante Maps Pty Ltd. All rights reserved.
           </p>
         </div>
       </div>

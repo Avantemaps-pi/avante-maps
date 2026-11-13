@@ -6,8 +6,33 @@
  */
 
 import { toast } from 'sonner';
-import { cleanupStalePayments } from '@/api/payments/cleanupStalePayments';
+import {
+  cleanupStalePayments,
+  type CleanupResponse,
+} from '@/api/payments/cleanupStalePayments';
+import { getSessionUserId } from '@/lib/sessionUserId';
 import { getPiAuthResult, clearPiAuth, initializePiNetwork, authenticateUser } from '../piNetwork/core';
+
+// The plain stale cleanup (no paymentId) runs at most once every 5 minutes per tab and user. Kept in
+// memory only, never in browser storage
+const STALE_CLEANUP_EVERY_MS = 5 * 60 * 1000;
+const lastStaleCleanup = new Map<string, number>();
+
+/**
+ * Cancels the signed-in user's payments that never completed and are over 10 minutes old, unless
+ * that was done less than 5 minutes ago in this tab. null: signed out, or throttled
+ */
+export const cleanupStalePaymentsThrottled =
+  async (): Promise<CleanupResponse | null> => {
+    // The Supabase ID from the session, never user.uid
+    const userId = await getSessionUserId();
+    if (!userId) return null;
+    const last = lastStaleCleanup.get(userId);
+    if (last !== undefined && Date.now() - last < STALE_CLEANUP_EVERY_MS)
+      return null;
+    lastStaleCleanup.set(userId, Date.now());
+    return cleanupStalePayments(userId);
+  };
 
 /**
  * Clear any stored local payment data

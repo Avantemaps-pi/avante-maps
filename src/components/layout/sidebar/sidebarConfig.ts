@@ -1,5 +1,6 @@
 
 import {
+  BadgeCheck,
   Building,
   MessageSquare,
   Info,
@@ -26,6 +27,11 @@ export const navItems = [
     icon: Wallet,
     label: 'Wallet',
   },
+  {
+    to: '/pricing',
+    icon: BadgeCheck,
+    label: 'Plans and pricing',
+  },
   // On phones CommuniCon is in the bottom nav; the desktop side menu still lists it
   {
     to: '/communicon',
@@ -45,23 +51,3 @@ export const navItems = [
     adminOnly: true,
   },
 ];
-
-export const legalItems = [
-  {
-    to: '/privacy',
-    label: 'Privacy Policy',
-  },
-  {
-    to: '/terms',
-    label: 'Terms of Service',
-  },
-  {
-    to: '/cookies',
-    label: 'Cookie Policy',
-  },
-  {
-    to: '/contact',
-    label: 'Contact Us',
-  },
-];
-

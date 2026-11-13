@@ -46,6 +46,8 @@ async function openRegistration(page: Page, options: { ipCountry?: { country: st
     return route.fulfill({ json: [] });
   });
   await page.route('**/auth/v1/**', (route) => route.fulfill({ json: session.user }));
+  // The app start's stale payment cleanup: not a registration write
+  await page.route('**/functions/v1/cleanup-stale-payments', (route) => route.fulfill({ json: { success: true, message: 'ok', cleanedCount: 0 } }));
   await page.route('**/rest/v1/users*', (route) => route.fulfill({ json: [{ subscription: 'organization' }] }));
   // Count (HEAD), name check and duplicate check all find nothing
   await page.route('**/rest/v1/businesses*', (route) =>
