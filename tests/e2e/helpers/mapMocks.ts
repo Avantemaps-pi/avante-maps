@@ -121,6 +121,18 @@ export async function mockMap(
   );
 }
 
+/**
+ * After mockMap: the sandbox user is an admin (for admin-only pages such as /diagnostics). The
+ * roles are re-read from user_roles after sign-in steps, so that answers admin too
+ */
+export async function makeAdmin(page: Page) {
+  await page.route('**/rest/v1/user_roles*', (route) => route.fulfill({ json: [{ role: 'user' }, { role: 'admin' }] }));
+  await page.addInitScript(
+    ([storageKey, user]) => localStorage.setItem(storageKey as string, JSON.stringify({ ...(user as object), lastAuthenticated: Date.now() })),
+    [STORAGE_KEY, { ...mockUser, roles: ['user', 'admin'] }],
+  );
+}
+
 export const pin = (page: Page, name: string) => page.locator(`img.leaflet-marker-icon[alt="${name}"]`);
 
 /**

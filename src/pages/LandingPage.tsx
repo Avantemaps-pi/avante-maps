@@ -4,7 +4,6 @@ import { Link } from '@/lib/router-compat';
 import { Button } from '@/components/ui/button';
 import AvanteMark from '@/components/brand/AvanteMark';
 import LoginDialog from '@/components/auth/LoginDialog';
-import mapPreview from '@/assets/map-preview.jpg';
 
 const features = [
   { icon: MapPin, title: 'Interactive Map', desc: "See exactly where Pi-accepting businesses are, filtered by what you're looking for." },
@@ -103,12 +102,19 @@ const LandingPage: React.FC = () => {
                 </Button>
               </div>
             </div>
-            <div className="hidden md:block flex-1">
-              <img
-                src={mapPreview}
-                alt="Avante Maps preview"
-                className="w-full rounded-2xl shadow-2xl"
-              />
+            {/* A simple map illustration: the Avante mark among a few pins, blue and white only */}
+            <div className="hidden md:block flex-1" aria-hidden>
+              <div className="relative aspect-[4/3] w-full rounded-2xl border border-white/15 bg-white/5 dark:border-border dark:bg-accent/40">
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="h-32 w-32 rounded-full bg-white dark:bg-background flex items-center justify-center shadow-2xl">
+                    <AvanteMark weight="bold" className="h-20 w-20 text-primary" />
+                  </div>
+                </div>
+                <MapPin className="absolute left-[16%] top-[20%] h-9 w-9 text-white/80 dark:text-primary" strokeWidth={1.75} />
+                <MapPin className="absolute right-[18%] top-[28%] h-7 w-7 text-white/60 dark:text-primary/80" strokeWidth={1.75} />
+                <MapPin className="absolute left-[26%] bottom-[16%] h-7 w-7 text-white/60 dark:text-primary/80" strokeWidth={1.75} />
+                <MapPin className="absolute right-[24%] bottom-[22%] h-9 w-9 text-white/80 dark:text-primary" strokeWidth={1.75} />
+              </div>
             </div>
           </div>
         </div>

@@ -87,6 +87,10 @@ export const MAPS_CONFIG = {
   defaultZoom: 13,
 };
 
+/** Lovable's preview/project hosts (not the published app) */
+export const isLovablePreviewHost = (hostname: string): boolean =>
+  hostname.includes('lovableproject.com') || hostname.includes('id-preview');
+
 // Development mode helpers with production safety checks
 export const isDevelopmentMode = (): boolean => import.meta.env.DEV;
 
@@ -101,7 +105,7 @@ export const shouldBypassAuth = (): boolean => {
   const hostname = window.location.hostname;
   
   // Allow test mode ONLY on Lovable preview/project domains (NOT the published app)
-  if (hostname.includes('lovableproject.com') || hostname.includes('id-preview')) {
+  if (isLovablePreviewHost(hostname)) {
     console.log('🧪 Preview environment: Test mode enabled');
     return true;
   }

@@ -309,7 +309,7 @@ const Review = () => {
                       alt={business.name} 
                       className="h-full w-full object-cover"
                       onError={(e) => {
-                        e.currentTarget.src = 'public/placeholder.svg';
+                        e.currentTarget.src = '/placeholder.svg';
                       }}
                     />
                   </div>

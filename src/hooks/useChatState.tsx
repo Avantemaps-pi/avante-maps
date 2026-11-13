@@ -41,7 +41,7 @@ const REVEAL_DONE_MS = 1800;
 const getDefaultMessages = (): ChatMessage[] => [
   {
     id: 1,
-    text: "Hi! I can help you check your business verification status, certification status, or answer questions about your listing. What would you like to know?",
+    text: "Hi! I can help you check your business verification status or answer questions about your listing. What would you like to know?",
     sender: "ai",
     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
   },
@@ -859,23 +859,6 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     [runVerification]
   );
 
-  // Show certification "coming soon" message
-  const triggerCertificationFlow = useCallback(() => {
-    const userMessage: ChatMessage = {
-      id: Date.now(),
-      text: "Check certification status",
-      sender: "user",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-    const replyMessage: ChatMessage = {
-      id: Date.now() + 1,
-      text: "Business certification is coming soon. Once it launches, you'll be able to request and check certification status right here in CommuniCon.",
-      sender: "support",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
-    setMessages(prev => [...prev, userMessage, replyMessage]);
-  }, []);
-
   // After the user's message, and from "Try again": every listing, active or not, so an owner who
   // downgraded can still see what they have. Only active ones can be checked from here
   const continueMyListings = useCallback(async () => {
@@ -1021,7 +1004,6 @@ export function useChatState(initialChatMode: ChatMode = "ai") {
     activePickerId,
     retryBusinessLoad,
     triggerVerificationFlow,
-    triggerCertificationFlow,
     showMyListings,
     sendContactOTP,
     verifyContactOTP,

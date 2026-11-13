@@ -18,7 +18,7 @@ const FAQS = [
   },
   {
     q: 'How do I register my business?',
-    a: 'You can register your business by clicking on the "Register Business" option in the navigation menu and following the steps.',
+    a: 'You can register your business by clicking on the "Registered Business" option in the navigation menu and following the steps.',
   },
   {
     q: 'Is Avante Maps affiliated with Pi Network?',

@@ -8,7 +8,7 @@ import VerificationHistoryRow from './VerificationHistoryRow';
 import type { ContactOTPResult } from './ContactOTPVerification';
 import MessagesPanel from '@/components/messages/MessagesPanel';
 import { useLocation } from '@/lib/router-compat';
-import { Send, Image, Video, Plus, ShieldCheck, Store, MessageSquare, Award } from 'lucide-react';
+import { Send, Image, Video, Plus, ShieldCheck, Store, MessageSquare } from 'lucide-react';
 import QuickActionsSheet, { type QuickAction } from './QuickActionsSheet';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -55,7 +55,6 @@ interface ChatInterfaceProps {
 
 const QUICK_REPLIES = [
   'Check verification status',
-  'Check certification status',
   'My listings',
 ];
 
@@ -152,7 +151,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     { icon: ShieldCheck, label: 'Check verification status', description: "See what's done and what's left", onSelect: () => onChipClick('Check verification status') },
     { icon: Store, label: 'My listings', description: 'Your businesses and their status', onSelect: () => onChipClick('My listings') },
     { icon: MessageSquare, label: 'Message a business', description: 'Opens Messages', onSelect: () => onChatModeChange('live') },
-    { icon: Award, label: 'Certification', description: 'Request it here once it launches' },
   ];
   const runQuickAction = (action: QuickAction) => {
     ranQuickActionRef.current = true;

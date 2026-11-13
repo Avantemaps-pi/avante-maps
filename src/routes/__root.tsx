@@ -25,7 +25,7 @@ import { initializePiNetwork } from "@/utils/piNetwork";
 import { prefetchHighPriorityRoutes } from "@/lib/routePrefetch";
 import { markAppHydrated } from "@/utils/hydrationSignal";
 import { reportLovableError } from "@/lib/lovable-error-reporting";
-import { MAINNET_PI_HOSTNAMES, PI_BROWSER_UA_MARKERS } from "@/config/environment";
+import { MAINNET_PI_HOSTNAMES, PI_BROWSER_UA_MARKERS, isLovablePreviewHost } from "@/config/environment";
 
 import appCss from "../styles.css?url";
 import heroIcon72 from "@/assets/avante-icon-72.webp";
@@ -198,8 +198,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { children: PI_INIT_SCRIPT },
       { type: "application/ld+json", children: ORG_JSON_LD },
       { type: "application/ld+json", children: WEBSITE_JSON_LD },
-      // IMPORTANT: DO NOT REMOVE THIS TAG
-      { src: "https://cdn.gpteng.co/gptengineer.js", type: "module", defer: true },
+      // Lovable's editor script (cdn.gpteng.co/gptengineer.js) loads in RootComponent, on Lovable
+      // preview hosts only
     ],
   }),
   shellComponent: RootShell,
@@ -296,6 +296,17 @@ function RootComponent() {
       return () => window.removeEventListener("load", initPiSdk);
     }
     return undefined;
+  }, []);
+
+  // IMPORTANT: DO NOT REMOVE: Lovable's editor script, needed in Lovable's preview. Only there:
+  // the published app doesn't load it
+  useEffect(() => {
+    if (!isLovablePreviewHost(window.location.hostname)) return;
+    if (document.querySelector('script[src="https://cdn.gpteng.co/gptengineer.js"]')) return;
+    const script = document.createElement("script");
+    script.src = "https://cdn.gpteng.co/gptengineer.js";
+    script.type = "module";
+    document.head.appendChild(script);
   }, []);
 
   // ported from App.tsx — color scheme bootstrap
