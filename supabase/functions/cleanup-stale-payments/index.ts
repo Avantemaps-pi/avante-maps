@@ -33,15 +33,18 @@ function isStalePayment(payment: any): boolean {
 }
 
 const UNSIGNED_CANCEL_ERROR = 'Cancelled: not signed in the Pi wallet';
+const STALE_CANCEL_ERROR = 'Payment automatically cancelled due to staleness (>10 minutes old)';
 
-// One payment the wallet closed without signing (not enough funds, or the user cancelled): cancelled
-// at Pi and in its row at once, but only when it's the caller's, still open, and Pi confirms nothing
-// was signed. If Pi shows a transaction it's left alone: { signed: true } (with the txid) lets the
-// client complete it the usual way
+// One payment cancelled at Pi and in its row, but only when it's the caller's, still open, has no
+// txid, and Pi confirms nothing was signed. Used for the payment the wallet closed without signing
+// (paymentId) and for each stale row. If our row has a txid or Pi shows a transaction, it's left
+// alone: { signed: true } (with the txid) lets the client complete it the usual way. If Pi can't be
+// reached or refuses the cancel, the row is left for next time
 async function cancelUnsignedPayment(
   piPayments: PiPayments,
   userId: string,
   paymentId: string,
+  errorText: string = UNSIGNED_CANCEL_ERROR,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const { data: row, error: rowError } = await supabaseClient
     .from('payments')
@@ -61,6 +64,11 @@ async function cancelUnsignedPayment(
   }
   if (row.status?.completed || row.status?.cancelled) {
     return { status: 200, body: { success: true, message: 'Payment already finished', cleanedCount: 0 } };
+  }
+  // A txid on our row: signed in the wallet, so the Pi may have moved. Never cancelled
+  if (row.txid) {
+    console.log(`Payment ${paymentId} has a txid on its row: not cancelled`);
+    return { status: 200, body: { success: true, signed: true, txid: row.txid, message: 'Payment was signed', cleanedCount: 0 } };
   }
 
   // Pi decides whether anything was signed, with the key of the app that has the payment
@@ -96,7 +104,7 @@ async function cancelUnsignedPayment(
         verified: false,
         completed: false,
         cancelled: true,
-        error: UNSIGNED_CANCEL_ERROR,
+        error: errorText,
       },
       updated_at: new Date().toISOString(),
     })
@@ -198,45 +206,25 @@ Deno.serve(async (req) => {
 
     const stalePayments = payments.filter(isStalePayment);
     let cleanedCount = 0;
+    let signedCount = 0;
 
     console.log(`Found ${stalePayments.length} stale payments to clean up`);
 
-    // Clean up each stale payment
+    // Each stale payment as safely as one by paymentId: cancelled only when Pi confirms nothing was
+    // signed, and its row marked only once Pi has cancelled it (or already had)
     for (const payment of stalePayments) {
       try {
         console.log(`Cleaning up stale payment: ${payment.payment_id}`);
-
-        // Try to cancel with Pi Network API, with the key of the app that has the payment
-        const located = await piPayments.findClient(payment.payment_id);
-        if (located.ok) {
-          const cancelResponse = await located.client.cancel(payment.payment_id);
-          console.log(`Pi Network cancel response for ${payment.payment_id} (pi_app ${located.client.app}):`, cancelResponse.status);
-        } else {
-          console.log(`Pi Network lookup failed for ${payment.payment_id} (pi_app ${located.app}):`, located.status ?? located.reason);
-        }
-
-        // Update our database regardless of Pi Network response
-        const { error: updateError } = await supabaseClient
-          .from('payments')
-          .update({
-            status: {
-              approved: false,
-              verified: false,
-              completed: false,
-              cancelled: true,
-              error: 'Payment automatically cancelled due to staleness (>10 minutes old)'
-            },
-            updated_at: new Date().toISOString()
-          })
-          .eq('payment_id', payment.payment_id);
-
-        if (!updateError) {
-          cleanedCount++;
+        const { body } = await cancelUnsignedPayment(piPayments, userId, payment.payment_id, STALE_CANCEL_ERROR);
+        if (body.signed) {
+          signedCount++;
+          console.log(`Stale payment ${payment.payment_id} was signed: left for completion`);
+        } else if (typeof body.cleanedCount === 'number' && body.cleanedCount > 0) {
+          cleanedCount += body.cleanedCount;
           console.log(`Successfully cleaned up payment: ${payment.payment_id}`);
-        } else {
-          console.error(`Error updating payment ${payment.payment_id}:`, updateError);
+        } else if (!body.success) {
+          console.log(`Stale payment ${payment.payment_id} left for next time: ${body.message}`);
         }
-
       } catch (error) {
         console.error(`Error cleaning up payment ${payment.payment_id}:`, error);
         // Continue with other payments even if one fails
@@ -249,7 +237,8 @@ Deno.serve(async (req) => {
       JSON.stringify({ 
         success: true, 
         message: `Cleaned up ${cleanedCount} stale payments`, 
-        cleanedCount 
+        cleanedCount,
+        signedCount,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
