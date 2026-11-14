@@ -67,6 +67,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const pendingAuthRef = useRef<boolean>(false);
   const logoutRef = useRef<Promise<void> | null>(null);
+  // Counts logouts, so work started before one (a background refresh) doesn't sign the old user back in
+  const logoutCountRef = useRef<number>(0);
   const initAttempted = useRef<boolean>(false);
   const authTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const devModeToastShown = useRef<boolean>(false);
@@ -485,6 +487,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshUserData = useCallback(async (force = false, silent = false): Promise<void> => {
     const now = Date.now();
     if (!force && now - lastRefresh < REFRESH_COOLDOWN) return;
+    const logoutsAtStart = logoutCountRef.current;
+    const loggedOutSince = () => logoutCountRef.current !== logoutsAtStart;
 
     if (!isSdkInitialized) {
       const ok = await ensureSdkInitialized(3, 600);
@@ -514,7 +518,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       safeSetIsLoading(true);
     }
     try {
-      await refreshUserDataService(user, safeSetUser, silent ? () => {} : safeSetIsLoading, silent);
+      const setIfStillSignedIn = (u: PiUser) => {
+        if (!loggedOutSince()) safeSetUser(u);
+      };
+      await refreshUserDataService(user, setIfStillSignedIn, silent ? () => {} : safeSetIsLoading, silent);
+      if (loggedOutSince()) {
+        // The refresh saved the old user again after the logout cleared it
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved && (JSON.parse(saved) as PiUser).uid === user.uid) localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          localStorage.removeItem(STORAGE_KEY);
+        }
+        return;
+      }
       secureLog.info('User data refreshed');
       setLastRefresh(now);
     } catch (error) {
@@ -543,6 +560,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (logoutRef.current) return logoutRef.current;
 
       const run = async () => {
+        logoutCountRef.current += 1;
         if (isMountedRef.current) setIsLoggingOut(true);
         try {
           // Clear Supabase session first
