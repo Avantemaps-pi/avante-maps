@@ -364,6 +364,8 @@ for (const path of ['/contact', '/privacy', '/cookies']) {
     await expect(
       page.getByText('Pietermaritzburg, South Africa'),
     ).toBeVisible();
-    await expect(page.locator('body')).not.toContainText(/Jabu|Ndlovu|3201/);
+    await expect(page.locator('body')).not.toContainText(
+      /\bStreet\b|KZN \d{4}/,
+    );
   });
 }
