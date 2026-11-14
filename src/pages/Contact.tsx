@@ -18,11 +18,11 @@ const FAQS = [
   },
   {
     q: 'How do I register my business?',
-    a: 'You can register your business by clicking on the "Register Business" option in the navigation menu and following the steps.',
+    a: 'You can register your business by clicking on the "Registered Business" option in the navigation menu and following the steps.',
   },
   {
     q: 'Is Avante Maps affiliated with Pi Network?',
-    a: 'Avante Maps is an independent platform created by a Pi Network enthusiast to support the Pi ecosystem.',
+    a: 'No. Avante Maps is an independent platform created by a Pi Network enthusiast to support the Pi ecosystem.',
   },
 ];
 
@@ -83,8 +83,8 @@ const Contact = () => {
                 <Mail className="h-5 w-5 text-primary" />
                 <h3 className="text-lg font-medium">Email</h3>
               </div>
-              <p className="text-sm break-all">inquiries@avantemaps.com</p>
-              <p className="text-xs text-muted-foreground mt-1">For general inquiries</p>
+              <p className="text-sm break-all">support@avantemaps.com</p>
+              <p className="text-xs text-muted-foreground mt-1">For questions and support</p>
             </div>
 
             <div className="p-4 sm:p-6">
@@ -101,8 +101,7 @@ const Contact = () => {
                 <MapPin className="h-5 w-5 text-primary" />
                 <h3 className="text-lg font-medium">Address</h3>
               </div>
-              <p className="text-sm">113 Jabu Ndlovu</p>
-              <p className="text-xs text-muted-foreground mt-1">Pietermaritzburg, KZN 3201</p>
+              <p className="text-sm">Pietermaritzburg, South Africa</p>
             </div>
           </div>
         </Card>
@@ -140,7 +139,6 @@ const Contact = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="inquiries@avantemaps.com">Inquiries</SelectItem>
-                    <SelectItem value="partnerships@avantemaps.com">Partnerships</SelectItem>
                     <SelectItem value="support@avantemaps.com">Support</SelectItem>
                     <SelectItem value="businesses@avantemaps.com">Businesses</SelectItem>
                   </SelectContent>

@@ -9,7 +9,12 @@
  * 375x812 with the sandbox session, a fake Supabase session and mocked Supabase.
  */
 import { test, expect, type Page, type Browser } from './helpers/fixtures';
-import { mockMap, NEARBY_BUSINESSES, mockUser } from './helpers/mapMocks';
+import {
+  makeAdmin,
+  mockMap,
+  NEARBY_BUSINESSES,
+  mockUser,
+} from './helpers/mapMocks';
 
 test.use({
   viewport: { width: 375, height: 812 },
@@ -468,6 +473,8 @@ test.describe('in the Pi Browser', () => {
     page,
   }) => {
     await setup(page);
+    // An admin-only page
+    await makeAdmin(page);
     await page.goto('/diagnostics');
     const row = (label: string) =>
       page.locator(`[data-row="Pi SDK: ${label}"] dd`);
@@ -488,6 +495,8 @@ test.describe('in the Pi Browser', () => {
     page,
   }) => {
     await setup(page);
+    // An admin-only page
+    await makeAdmin(page);
     await page.goto('/diagnostics');
     const row = (label: string) =>
       page.locator(`[data-row="Pi SDK: ${label}"] dd`);

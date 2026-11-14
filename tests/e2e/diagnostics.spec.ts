@@ -2,11 +2,15 @@
  * /diagnostics: what this browser supports for notifications, for checking the Pi Browser on a
  * phone. Not linked from anywhere, not in the sitemap, and noindex.
  *
- * 375x812. The real Pi SDK is blocked; some tests stub window.Pi instead.
+ * Admins only: everyone else gets the 404 page.
+ *
+ * 375x812, signed in as an admin with the sandbox session (Supabase mocked) unless a test says
+ * otherwise. The real Pi SDK is blocked; some tests stub window.Pi instead.
  */
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { test, expect, type Page } from './helpers/fixtures';
+import { SANDBOX_MOCK_KEY, STORAGE_KEY, mockUser } from './helpers/mapMocks';
 
 test.use({
   viewport: { width: 375, height: 812 },
@@ -31,9 +35,43 @@ const LABELS = [
 
 async function setup(
   page: Page,
-  options: { pi?: boolean; clipboardFails?: boolean } = {},
+  options: {
+    pi?: boolean;
+    clipboardFails?: boolean;
+    as?: 'admin' | 'user' | 'signed-out';
+  } = {},
 ) {
   await page.route('**/pi-sdk.js', (route) => route.abort());
+  const as = options.as ?? 'admin';
+  if (as !== 'signed-out') {
+    await page.route('https://xvpwbocwasbtzrzrxyvu.supabase.co/**', (route) =>
+      route.fulfill({ json: [] }),
+    );
+    // Roles are re-read from user_roles after sign-in steps
+    await page.route('**/rest/v1/user_roles*', (route) =>
+      route.fulfill({
+        json:
+          as === 'admin'
+            ? [{ role: 'user' }, { role: 'admin' }]
+            : [{ role: 'user' }],
+      }),
+    );
+    await page.addInitScript(
+      ([mockKey, storageKey, user]) => {
+        localStorage.setItem(mockKey as string, '1');
+        localStorage.setItem(storageKey as string, JSON.stringify(user));
+      },
+      [
+        SANDBOX_MOCK_KEY,
+        STORAGE_KEY,
+        {
+          ...mockUser,
+          roles: as === 'admin' ? ['user', 'admin'] : ['user'],
+          lastAuthenticated: Date.now(),
+        },
+      ],
+    );
+  }
   await page.addInitScript(
     ({ pi, clipboardFails }) => {
       const w = window as unknown as {
@@ -209,3 +247,16 @@ test('/diagnostics is not in public/sitemap.xml', () => {
   expect(sitemap).toContain('<loc>https://mainnet.avantemaps.com/about</loc>');
   expect(sitemap).not.toContain('diagnostics');
 });
+
+for (const as of ['signed-out', 'user'] as const) {
+  test(`${as === 'user' ? 'a signed-in non-admin' : 'signed out'}: the 404 page, and none of the diagnostics`, async ({
+    page,
+  }) => {
+    await setup(page, { as });
+    await page.goto('/diagnostics');
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page.getByText('Location Not Found')).toBeVisible();
+    await expect(page.locator('[data-row]')).toHaveCount(0);
+    await expect(page.getByText('Access denied')).toHaveCount(0);
+  });
+}

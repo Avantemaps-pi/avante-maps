@@ -196,7 +196,7 @@ test('enough balance: the balance row is selected, and paying spends it without 
   await openSheet(page);
 
   await expect(sheet(page).getByRole('heading', { name: 'Small Business plan' })).toBeVisible();
-  await expect(sheet(page).getByText('$5.00 a month · 65.19 π today')).toBeVisible();
+  await expect(sheet(page).getByText('65.19 π a month')).toBeVisible();
   await expect(sheet(page).getByRole('group', { name: 'Pay with' })).toBeVisible();
   await expect(balanceRadio(page)).toBeChecked();
   await expect(sheet(page).getByText('100.00 π available · 34.81 π left after')).toBeVisible();
@@ -226,7 +226,7 @@ test('yearly: annual price and wording, and the function is sent "annual"', asyn
   await page.getByRole('button', { name: /Yearly/ }).tap();
   await expect(page.getByText('π 625.82')).toBeVisible();
   await planButton(page).tap();
-  await expect(sheet(page).getByText('$48.00 a year · 625.82 π today')).toBeVisible();
+  await expect(sheet(page).getByText('625.82 π a year')).toBeVisible();
   await expect(sheet(page).getByText('Covers 1 year from today.')).toBeVisible();
   await sheet(page).getByRole('button', { name: 'Pay 625.82 π from balance' }).tap();
   await expect(page.getByText('Small Business plan active')).toBeVisible();
@@ -364,10 +364,10 @@ for (const [name, close] of [
   });
 }
 
-test('Continue in Pi Wallet charges the π shown in the sheet, not the USD price', async ({ page }) => {
+test('Continue in Pi Wallet charges the π shown in the sheet', async ({ page }) => {
   const { approveCalls, completeCalls } = await setup(page, { balance: 3.2, complete: PIPELINE_OK });
   await openSheet(page);
-  await expect(sheet(page).getByText('$5.00 a month · 65.19 π today')).toBeVisible();
+  await expect(sheet(page).getByText('65.19 π a month')).toBeVisible();
   await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
   await expect.poll(async () => (await piPayments(page)).length).toBe(1);
   const payment = (await piPayments(page))[0]!;
@@ -382,8 +382,8 @@ test('Continue in Pi Wallet charges the π shown in the sheet, not the USD price
 
 // At $0.0604, $5 is 82.7815 π and $48 is 794.7020 π: rounding up and to the nearest 0.01 differ for both
 for (const [name, yearly, shown, sheetText, memo, frequency] of [
-  ['monthly', false, '82.79', '$5.00 a month · 82.79 π today', 'Small Business plan (monthly)', 'monthly'],
-  ['yearly', true, '794.71', '$48.00 a year · 794.71 π today', 'Small Business plan (yearly)', 'annual'],
+  ['monthly', false, '82.79', '82.79 π a month', 'Small Business plan (monthly)', 'monthly'],
+  ['yearly', true, '794.71', '794.71 π a year', 'Small Business plan (yearly)', 'annual'],
 ] as const) {
   test(`${name}: the card, the balance option and the Pi Wallet option all show ${shown} π`, async ({ page }) => {
     const { price, payCalls } = await setup(page, { balance: 5000, pay: { status: 200, json: { success: true, balance: 1, amountPi: Number(shown), tier: 'small-business', frequency } } });
@@ -452,7 +452,7 @@ test('Pi price unavailable: both rows and the button disabled, with the message'
   await expect(balanceRadio(page)).not.toBeChecked();
   await expect(sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' })).toBeDisabled();
   // No made-up amount from the fallback rate
-  await expect(sheet(page).getByText('$5.00 a month · … π today')).toBeVisible();
+  await expect(sheet(page).getByText('… π a month')).toBeVisible();
   expect(await piPayments(page)).toEqual([]);
 });
 
@@ -463,11 +463,11 @@ test('amount_mismatch: a toast, no completion, no banner, and the sheet reopens 
     rowStatus: { approved: false, completed: false, cancelled: true, error: 'amount_mismatch' },
   });
   await openSheet(page);
-  await expect(sheet(page).getByText('$5.00 a month · 65.19 π today')).toBeVisible();
+  await expect(sheet(page).getByText('65.19 π a month')).toBeVisible();
   price.usd = 0.0714; // The cron moved it: $5 is now 70.03 π, rounded up
   await sheet(page).getByRole('button', { name: 'Continue in Pi Wallet' }).tap();
   await expect(page.getByText('The price changed. Please try again.')).toBeVisible();
-  await expect(sheet(page).getByText('$5.00 a month · 70.03 π today')).toBeVisible();
+  await expect(sheet(page).getByText('70.03 π a month')).toBeVisible();
   await expect(page.getByText('Payment cancelled')).toHaveCount(0);
   expect(completeCalls).toEqual([]);
   // And paying again asks for the new amount
@@ -851,4 +851,74 @@ test('a signed payment shows "Confirming payment…" while it is completed', asy
   await expect(page.getByText('Confirming payment…')).toBeVisible();
   releaseComplete();
   await expect(page.getByText(/Successfully subscribed/)).toBeVisible();
+});
+
+// ---- Pi only: no fiat on the plan cards or in the sheet
+
+const expectNoFiat = async (page: Page) => {
+  await expect(page.locator('body')).not.toContainText(/USD|\$|≈/);
+};
+
+// Serves the app from a mainnet hostname, without leaving the machine
+async function asMainnet(page: Page) {
+  const local = process.env.PREVIEW_URL ?? 'http://localhost:8080';
+  await page.route('https://mainnet.avantemaps.com/**', async (route) => {
+    try {
+      const response = await route.fetch({ url: route.request().url().replace('https://mainnet.avantemaps.com', local) });
+      await route.fulfill({ response });
+    } catch {
+      // The test ended while this request was still being forwarded
+    }
+  });
+}
+
+for (const host of ['testnet', 'mainnet'] as const) {
+  test(`${host} host: Pricing and the checkout sheet show π only, never $ or USD`, async ({ page }) => {
+    await setup(page, { balance: 100 });
+    if (host === 'mainnet') {
+      await asMainnet(page);
+      await page.goto('https://mainnet.avantemaps.com/pricing');
+    } else {
+      await page.goto('/pricing');
+    }
+    await expect(page.getByText('π 65.19')).toBeVisible();
+    await expectNoFiat(page);
+
+    await page.getByRole('button', { name: /Yearly/ }).tap();
+    await expect(page.getByText('π 625.82')).toBeVisible();
+    await expectNoFiat(page);
+
+    await planButton(page).tap();
+    await expect(sheet(page).getByText('625.82 π a year')).toBeVisible();
+    await expectNoFiat(page);
+  });
+}
+
+test('yearly: the saving is shown as a percentage, not a crossed-out $ price', async ({ page }) => {
+  await setup(page);
+  await openPricing(page);
+  // Under each price, not the Yearly tab's own badge
+  const cardSavings = page.locator('span.text-primary', { hasText: /^Save \d+%$/ });
+  await expect(cardSavings).toHaveCount(0);
+  await page.getByRole('button', { name: /Yearly/ }).tap();
+  // $48 against 12 × $5, and $96 against 12 × $10: both 20%
+  await expect(cardSavings).toHaveText(['Save 20%', 'Save 20%']);
+  await expect(page.locator('.line-through')).toHaveCount(0);
+});
+
+test('Pi price unavailable: the cards say "Price unavailable" with Retry, never a $ price', async ({ page }) => {
+  await setup(page, { priceFails: true });
+  await page.goto('/pricing');
+  const unavailable = page.getByText('Price unavailable', { exact: true });
+  // Small Business and Organization; Individual is free and needs no rate
+  await expect(unavailable).toHaveCount(2);
+  await expectNoFiat(page);
+  await expect(page.getByText('π 0', { exact: true })).toBeVisible();
+
+  await page.route('**/rest/v1/pi_price*', (route) =>
+    route.fulfill({ json: { price_usd: PRICE_USD, updated_at: '2026-11-04T00:00:00Z' } }),
+  );
+  await page.getByRole('button', { name: 'Retry' }).first().tap();
+  await expect(page.getByText('π 65.19')).toBeVisible();
+  await expect(unavailable).toHaveCount(1);
 });

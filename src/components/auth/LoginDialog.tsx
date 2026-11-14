@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Dialog, DialogContent, DialogTitle, DialogClose } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { X, AlertCircle, HelpCircle, RefreshCw, ExternalLink, WifiOff, Loader2 } from "lucide-react";
+import { X, AlertCircle, HelpCircle, RefreshCw, ExternalLink, WifiOff, Loader2, UserRound } from "lucide-react";
 import { Link, useNavigate } from "@/lib/router-compat";
 import { useAuth } from '@/context/auth';
 import { isPiNetworkAvailable, isPiBrowser } from '@/utils/piNetwork';
@@ -458,7 +458,7 @@ const LoginDialog: React.FC<LoginDialogProps> = ({
           <div className="w-full bg-muted/50 border border-border/60 p-3 rounded-xl mb-4">
             <div className="flex items-center">
               <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center shrink-0">
-                <img src="/lovable-uploads/816179f9-d16d-46a7-9d6e-169846c0d0da.svg" alt="User" className="w-6 h-6" />
+                <UserRound className="w-6 h-6 text-primary" aria-hidden="true" />
               </div>
               <div className="ml-3 text-left">
                 <p className="font-medium">Pi Network User</p>

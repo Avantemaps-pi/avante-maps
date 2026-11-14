@@ -422,8 +422,10 @@ test.describe('text size at 375x812', () => {
 
   test('quick replies are at least 44px tall with 14px text', async ({ page }) => {
     await setup(page);
-    const chips = page.getByRole('button', { name: /^(Check verification status|Check certification status|My listings)$/ });
-    await expect(chips).toHaveCount(3);
+    const chips = page.getByRole('button', { name: /^(Check verification status|My listings)$/ });
+    await expect(chips).toHaveCount(2);
+    // Certification isn't offered until it ships
+    await expect(page.getByRole('button', { name: 'Check certification status' })).toHaveCount(0);
     const sizes = await chips.evaluateAll((els) =>
       els.map((el) => {
         const r = el.getBoundingClientRect();

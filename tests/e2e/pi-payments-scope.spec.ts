@@ -12,7 +12,12 @@
  * 375x812 in the Pi Browser, with the sandbox session, a fake Supabase session and mocked Supabase.
  */
 import { test, expect, type Page } from './helpers/fixtures';
-import { mockMap, NEARBY_BUSINESSES, mockUser } from './helpers/mapMocks';
+import {
+  makeAdmin,
+  mockMap,
+  NEARBY_BUSINESSES,
+  mockUser,
+} from './helpers/mapMocks';
 
 const PI_BROWSER_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0 Mobile Safari/537.36 PiBrowser/1.17.1';
@@ -394,6 +399,8 @@ const sdkRow = (page: Page, label: string) =>
   page.locator(`[data-row="Pi SDK: ${label}"] dd`);
 
 async function openDiagnostics(page: Page) {
+  // An admin-only page
+  await makeAdmin(page);
   await page.goto('/diagnostics');
   await expect(
     sdkRow(page, 'this window.Pi authenticated with payments'),

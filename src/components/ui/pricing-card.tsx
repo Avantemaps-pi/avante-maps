@@ -1,7 +1,8 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Check, X, Info } from "lucide-react";
+import { Check, X, Info, RefreshCw } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { usePiPrice } from "@/hooks/usePiPrice";
 
 export interface PricingTier {
@@ -41,12 +42,22 @@ export function PricingCard({
 }: PricingCardProps) {
   const {
     convertUsdToPiRoundedUp,
-    isLoading: isPriceLoading
+    isLoading: isPriceLoading,
+    error: piPriceError,
+    refresh: refreshPrice
   } = usePiPrice();
 
   const price = tier.price[paymentFrequency as keyof typeof tier.price];
   const isCustom = typeof price === "string";
-  const piPrice = !isCustom && typeof price === 'number' ? convertUsdToPiRoundedUp(price) : null;
+  const isFree = price === 0;
+  // usePiPrice falls back to a made-up rate when pi_price can't be read, so that rate isn't shown
+  const piPrice = isFree ? "0" : typeof price === "number" && !piPriceError ? convertUsdToPiRoundedUp(price) : null;
+  const priceUnavailable = !isCustom && !isFree && !isPriceLoading && piPrice === null;
+  const monthly = tier.price.monthly;
+  const yearlySavingPercent =
+    paymentFrequency === "yearly" && typeof price === "number" && typeof monthly === "number" && monthly > 0
+      ? Math.round((1 - price / (monthly * 12)) * 100)
+      : 0;
 
   return (
     <div id={id} className="">
@@ -63,9 +74,10 @@ export function PricingCard({
         </div>
         
         <div className="flex flex-col gap-1">
-          {piPrice ? (
+          {isCustom ? (
+            <span className="text-5xl font-bold tracking-tight text-foreground">{price}</span>
+          ) : piPrice ? (
             <div className="flex flex-col gap-1">
-              {/* Primary: Pi amount */}
               <div className="flex items-baseline flex-wrap gap-x-2">
                 <span className="text-5xl font-bold tracking-tight text-foreground">
                   π {piPrice}
@@ -74,38 +86,20 @@ export function PricingCard({
                   / {paymentFrequency}
                 </span>
               </div>
-              {/* Secondary: USD reference */}
-              <div className="flex items-baseline flex-wrap gap-x-2">
-                <span className="text-sm text-muted-foreground">
-                  ≈ ${price} USD
-                </span>
-                {(() => {
-                  const monthly = tier.price.monthly;
-                  const showStrike =
-                    paymentFrequency === 'yearly' &&
-                    typeof monthly === 'number' &&
-                    Number.isFinite(monthly) &&
-                    monthly > 1;
-                  return showStrike ? (
-                    <span className="text-sm text-muted-foreground line-through">
-                      ${monthly * 12} USD
-                    </span>
-                  ) : null;
-                })()}
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-baseline">
-              {!isCustom && <span className="text-3xl text-foreground">$</span>}
-              <span className="text-5xl font-bold tracking-tight text-foreground">
-                {price}
-              </span>
-              {!isCustom && (
-                <span className="ml-1 text-base font-normal text-muted-foreground">
-                  / {paymentFrequency}
-                </span>
+              {yearlySavingPercent > 0 && (
+                <span className="text-sm font-medium text-primary">Save {yearlySavingPercent}%</span>
               )}
             </div>
+          ) : priceUnavailable ? (
+            <div className="flex items-center gap-3" role="status">
+              <span className="text-base text-muted-foreground">Price unavailable</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => refreshPrice()}>
+                <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <Skeleton className="h-12 w-40" aria-label="Loading price" />
           )}
         </div>
 

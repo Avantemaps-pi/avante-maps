@@ -2,7 +2,7 @@ import React from 'react';
 import AvanteMark from '@/components/brand/AvanteMark';
 import AppLayout from '@/components/layout/AppLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Mail, MessageCircle, Facebook, Twitter } from 'lucide-react';
+import { Mail } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useNavigate } from '@/lib/router-compat';
 import MetaTags from '@/components/seo/MetaTags';
@@ -120,28 +120,12 @@ const About = () => {
 
         <div className="flex flex-col items-center justify-center space-y-4 py-8">
           <h2 className="text-2xl font-semibold">Connect With Us</h2>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" className="rounded-full hover:text-primary" asChild>
-              <a href="https://wa.me/27683422444" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp">
-                <MessageCircle className="h-5 w-5" />
-              </a>
-            </Button>
-            <Button variant="outline" size="icon" className="rounded-full hover:text-primary" asChild>
-              <a href="https://x.com/Avantemaps" target="_blank" rel="noopener noreferrer" aria-label="X (Twitter)">
-                <Twitter className="h-5 w-5" />
-              </a>
-            </Button>
-            <Button variant="outline" size="icon" className="rounded-full hover:text-primary" asChild>
-              <a href="https://web.facebook.com/profile.php?id=61570803414310" target="_blank" rel="noopener noreferrer" aria-label="Facebook">
-                <Facebook className="h-5 w-5" />
-              </a>
-            </Button>
-            <Button variant="outline" className="rounded-full" size="icon" asChild>
-              <a href="mailto:inquiries@avantemaps.com" aria-label="Email">
-                <Mail className="h-5 w-5" />
-              </a>
-            </Button>
-          </div>
+          <Button variant="outline" className="rounded-full" asChild>
+            <a href="mailto:support@avantemaps.com">
+              <Mail className="h-5 w-5" />
+              support@avantemaps.com
+            </a>
+          </Button>
           <p className="text-sm text-muted-foreground mt-4">
             © {new Date().getFullYear()} Avante Maps Pty Ltd. All rights reserved.
           </p>

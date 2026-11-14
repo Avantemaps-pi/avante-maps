@@ -3,6 +3,8 @@ import { Helmet } from 'react-helmet-async';
 import { toast } from 'sonner';
 import AppLayout from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/context/auth';
+import NotFound from '@/pages/NotFound';
 import {
   ensurePiPaymentsAuth,
   getLastIncompletePayment,
@@ -200,7 +202,7 @@ async function showTestNotification(): Promise<string> {
   }
 }
 
-const Diagnostics = () => {
+const DiagnosticsPage = () => {
   const [rows, setRows] = useState<Row[]>([]);
   const [sdkRows, setSdkRows] = useState<Row[]>([]);
   const [sdkTest, setSdkTest] = useState<string | null>(null);
@@ -454,6 +456,28 @@ const Diagnostics = () => {
       </div>
     </AppLayout>
   );
+};
+
+// A developer page: admins only, as Notification Admin checks. Everyone else gets the 404 page,
+// so it doesn't show that the page exists
+const Diagnostics = () => {
+  const { isAdmin, isLoading } = useAuth();
+
+  // Loading only until we know: an admin's page stays mounted when auth reloads (e.g. after
+  // Authenticate for payments), or its results would be lost
+  if (isLoading && !isAdmin) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-full">
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (!isAdmin) return <NotFound />;
+
+  return <DiagnosticsPage />;
 };
 
 export default Diagnostics;

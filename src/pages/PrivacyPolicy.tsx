@@ -15,90 +15,121 @@ const PrivacyPolicy = () => {
           {/* ScrollArea wraps the CardContent */}
           <ScrollArea className="h-[60vh]">
             <CardContent className="prose prose-slate max-w-none py-[20px] pr-4">
-              <p className="text-muted-foreground"><strong>Effective Date:</strong> April 13, 2025</p>
+              <p className="text-muted-foreground"><strong>Effective Date:</strong> November 13, 2026</p>
 
               <div className="space-y-8">
                 <section>
-                  <h2 className="text-xl font-bold mb-4">1. Information We Collect</h2>
-                  <p>We may collect the following types of information:</p>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li><strong>Personal Identification Information:</strong> Name, email, phone, Pi Network username</li>
-                    <li><strong>Business Information:</strong> Business name, address, hours, description</li>
-                    <li><strong>Location Data:</strong> Precise location data (with permission)</li>
-                    <li><strong>Usage Information:</strong> Pages visited, features used, search queries</li>
-                    <li><strong>Device Information:</strong> IP, browser, OS, device identifiers</li>
-                    <li><strong>Transaction Data:</strong> Pi payments, subscriptions, or other transactions</li>
-                  </ul>
-                </section>
-
-                <section>
-                  <h2 className="text-xl font-bold mb-4">2. How We Use Your Information</h2>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li>Provide, maintain, and improve our services</li>
-                    <li>Process transactions and send related information</li>
-                    <li>Verify business listings and Pi payment acceptance</li>
-                    <li>Display relevant business recommendations</li>
-                    <li>Generate analytics and insights</li>
-                    <li>Send notifications about new features and updates</li>
-                    <li>Respond to comments and customer service requests</li>
-                    <li>Protect against fraudulent transactions</li>
-                    <li>Develop new features and services</li>
-                  </ul>
-                </section>
-
-                <section>
-                  <h2 className="text-xl font-bold mb-4">3. Sharing Your Information</h2>
-                  <ul className="list-disc pl-6 space-y-2">
-                    <li><strong>With Service Providers:</strong> Vendors performing services on our behalf</li>
-                    <li><strong>Business Partners:</strong> Pi Network and other partners</li>
-                    <li><strong>For Legal Compliance:</strong> Required by law or to protect rights/safety</li>
-                    <li><strong>With Your Consent:</strong> Only when you consent</li>
-                    <li><strong>Business Transfers:</strong> During mergers, acquisitions, or sales</li>
-                  </ul>
-                </section>
-
-                <section>
-                  <h2 className="text-xl font-bold mb-4">4. Security of Your Information</h2>
+                  <h2 className="text-xl font-bold mb-4">1. Who we are</h2>
                   <p>
-                    We use technical and organizational measures to protect your information. No method of transmission/storage is 100% secure, but we use commercially acceptable means.
+                    Avante Maps is a directory of businesses that accept Pi. It is run by Avante Maps Pty Ltd ("we", "us"). It is an independent app for Pi users: it is not made by, run by or affiliated with Pi Network.
+                  </p>
+                  <p className="mt-2">
+                    This policy explains, in plain language, what we collect, why, who helps us process it, and how to ask us to see or delete it.
                   </p>
                 </section>
 
                 <section>
-                  <h2 className="text-xl font-bold mb-4">5. Your Privacy Rights</h2>
+                  <h2 className="text-xl font-bold mb-4">2. What we collect from you</h2>
                   <ul className="list-disc pl-6 space-y-2">
-                    <li><strong>Access:</strong> Request copies of personal information</li>
-                    <li><strong>Rectification:</strong> Correct or complete information</li>
-                    <li><strong>Erasure:</strong> Request deletion</li>
-                    <li><strong>Restrict Processing:</strong> Restrict processing in certain cases</li>
-                    <li><strong>Data Portability:</strong> Transfer information to another organization</li>
-                    <li><strong>Objection:</strong> Object to processing</li>
+                    <li><strong>Your Pi account:</strong> your Pi username, Pi user ID and Pi wallet address, which Pi sends us when you sign in with Pi. We don't ask for your name, email address or phone number.</li>
+                    <li><strong>Home location:</strong> only if you set one. It is saved to your account so the map can open there, and you can remove it in Settings.</li>
+                    <li><strong>Approximate location:</strong> to centre the map near you, the app asks an IP geolocation service for a rough position based on your IP address. If you tap Locate me and allow it, your browser's location is used. Neither is saved to your account.</li>
+                    <li><strong>Messages and reviews:</strong> messages you send to businesses, and the reviews and comments you post.</li>
+                    <li><strong>CommuniCon AI chat:</strong> the text you type to the AI assistant, so it can reply.</li>
+                    <li><strong>Searches and business page views:</strong> what you search for and which business pages you open, used for the business owners' analytics.</li>
+                    <li><strong>Payments:</strong> the plan, the amount in π, and the Pi payment's ID and status, so we can activate your plan and show your wallet activity.</li>
+                    <li><strong>Error logs and device info:</strong> error reports and your browser's user agent, so we can find and fix problems.</li>
                   </ul>
-                  <p>Contact <strong>privacy@avantemaps.com</strong> to exercise your rights.</p>
                 </section>
 
                 <section>
-                  <h2 className="text-xl font-bold mb-4">6. Children's Privacy</h2>
-                  <p>
-                    Our Service is not directed to children under 13. We do not knowingly collect data from children under 13. Parents/guardians should contact us if aware of such data.
+                  <h2 className="text-xl font-bold mb-4">3. What businesses provide</h2>
+                  <p>If you list a business, you give us:</p>
+                  <ul className="list-disc pl-6 space-y-2 mt-2">
+                    <li>The business name, address and map position, photos, opening hours and description.</li>
+                    <li>Contact details: phone, email, website and contact names. <strong>These are shown publicly on your listing.</strong></li>
+                    <li>A payout wallet address for receiving Pi.</li>
+                    <li>Optionally, a verified email address for new-message alerts and account notices. You can turn alerts off at any time.</li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h2 className="text-xl font-bold mb-4">4. How we use it</h2>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>To sign you in, show the map and listings, and deliver messages.</li>
+                    <li>To activate plans you pay for and keep a record of payments.</li>
+                    <li>To show business owners how people find their listings (searches and page views).</li>
+                    <li>To send business owners the emails they asked for: contact verification codes, new-message alerts, plan reminders and important account notices.</li>
+                    <li>To keep the app working and secure, and to fix errors.</li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h2 className="text-xl font-bold mb-4">5. Who processes it for us</h2>
+                  <p>We use these service providers to run the app. Each one only gets what it needs for its job:</p>
+                  <ul className="list-disc pl-6 space-y-2 mt-2">
+                    <li><strong>Supabase:</strong> our database, file storage and sign-in sessions.</li>
+                    <li><strong>Vercel:</strong> hosts the app.</li>
+                    <li><strong>Brevo:</strong> sends our emails (contact verification codes, new-message alerts, plan reminders and account notices) to business owners' verified addresses.</li>
+                    <li><strong>Lovable AI gateway:</strong> generates the CommuniCon AI replies from the chat text you send.</li>
+                    <li><strong>IP geolocation services:</strong> ipwho.is (to centre the map and pick your country), and ipapi.co and geojs.io (Locate me, when your device can't give a location). They see your IP address.</li>
+                    <li><strong>OpenStreetMap:</strong> map tiles, and place names when you tap an area on the map. The map library's files load from unpkg.com.</li>
+                  </ul>
+                  <p className="mt-2">
+                    Pi Network handles signing in with Pi and Pi payments under Pi Network's own terms and privacy policy. We receive only the account and payment details listed above.
+                  </p>
+                  <p className="mt-2">
+                    We may also share information if the law requires it, or to protect people's safety.
                   </p>
                 </section>
 
                 <section>
-                  <h2 className="text-xl font-bold mb-4">7. Changes to This Privacy Policy</h2>
+                  <h2 className="text-xl font-bold mb-4">6. What we don't do</h2>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>We don't sell your data.</li>
+                    <li>We don't show ads.</li>
+                    <li>We don't use advertising trackers or cookies.</li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h2 className="text-xl font-bold mb-4">7. How long we keep it</h2>
                   <p>
-                    Updates will be posted on this page and the "Effective Date" updated.
+                    We keep your information while your account is active. If you delete your account in Settings, it is deleted for good after 15 days, and you can change your mind before then. Error logs are kept only as long as we need them to fix problems.
                   </p>
                 </section>
 
                 <section>
-                  <h2 className="text-xl font-bold mb-4">8. Contact Us</h2>
+                  <h2 className="text-xl font-bold mb-4">8. Seeing, correcting or deleting your data</h2>
+                  <ul className="list-disc pl-6 space-y-2">
+                    <li>To get a copy of your data, correct it or have it deleted, email <strong>support@avantemaps.com</strong> from the app's Contact page and tell us your Pi username.</li>
+                    <li>You can delete your account yourself in Settings.</li>
+                    <li>You can remove your home location in Settings, and edit or remove your business listings at any time.</li>
+                  </ul>
+                </section>
+
+                <section>
+                  <h2 className="text-xl font-bold mb-4">9. Children</h2>
                   <p>
-                    Questions about this Privacy Policy? Contact us at:
+                    Avante Maps is not meant for children under 13, and we don't knowingly collect their data. If you think a child has given us information, contact us and we'll delete it.
+                  </p>
+                </section>
+
+                <section>
+                  <h2 className="text-xl font-bold mb-4">10. Changes to this policy</h2>
+                  <p>
+                    When we change this policy, we'll update it here and change the effective date at the top.
+                  </p>
+                </section>
+
+                <section>
+                  <h2 className="text-xl font-bold mb-4">11. Contact us</h2>
+                  <p>
+                    Questions about this policy or your data? Contact Avante Maps Pty Ltd:
                   </p>
                   <p className="mt-2">
                     <strong>Email:</strong> support@avantemaps.com<br />
-                    <strong>Address:</strong> 113 Jabu Ndlovu Street, KZN 3201
+                    <strong>Address:</strong> Pietermaritzburg, South Africa
                   </p>
                 </section>
               </div>

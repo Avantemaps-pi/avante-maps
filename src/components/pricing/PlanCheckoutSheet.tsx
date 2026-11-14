@@ -133,7 +133,7 @@ const PlanCheckoutSheet: React.FC<PlanCheckoutSheetProps> = ({ open, onOpenChang
           <div>
             <SheetTitle className="text-lg font-bold text-foreground">{tier?.name} plan</SheetTitle>
             <SheetDescription className="text-sm text-muted-foreground">
-              ${typeof usd === 'number' ? usd.toFixed(2) : ''} a {isYearly ? 'year' : 'month'} · {amountShown ?? '…'} π today
+              {amountShown ?? '…'} π a {isYearly ? 'year' : 'month'}
             </SheetDescription>
           </div>
           <SheetClose

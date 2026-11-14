@@ -156,7 +156,7 @@ const Pricing = () => {
         keywords={['pi network pricing', 'subscription plans', 'pi payment', 'business subscription', 'cryptocurrency pricing']}
         ogType="website"
         ogTitle="Avante Maps Pricing - Pay with Pi"
-        ogDescription="Flexible subscription plans powered by Pi Network"
+        ogDescription="Flexible subscription plans for Pi Network users"
         ogImage={{
           url: `${getOrigin()}/og-image.png`,
           width: 1200,
