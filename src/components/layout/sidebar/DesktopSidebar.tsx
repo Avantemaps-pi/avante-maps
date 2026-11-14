@@ -28,16 +28,17 @@ const DesktopSidebar = ({
     isAuthenticated,
     login,
     logout,
+    isLoggingOut,
     isLoading
   } = useAuth();
-  
+
   const handleLogin = () => {
     login();
     onLinkClick();
   };
-  
-  const handleLogout = () => {
-    logout();
+
+  const handleLogout = async () => {
+    await logout();
     onLinkClick();
   };
   return <Sidebar className={cn("hidden md:flex", className)}>
@@ -72,9 +73,9 @@ const DesktopSidebar = ({
 
           {isAuthenticated && (
             <div className="mt-4 pt-4 border-t border-sidebar-border">
-              <Button onClick={handleLogout} disabled={isLoading} variant="outline" className="w-full">
+              <Button onClick={handleLogout} disabled={isLoading || isLoggingOut} variant="outline" className="w-full">
                 <LogOut className="h-4 w-4 mr-2" />
-                Logout
+                {isLoggingOut ? 'Logging out…' : 'Logout'}
               </Button>
             </div>
           )}

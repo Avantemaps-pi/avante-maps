@@ -31,13 +31,7 @@ const MobileSidebar = ({
   onLinkClick
 }: MobileSidebarProps) => {
   const navigate = useNavigate();
-  const {
-    user,
-    isAuthenticated,
-    login,
-    logout,
-    isLoading
-  } = useAuth();
+  const { user, isAuthenticated, login, logout, isLoggingOut, isLoading } = useAuth();
 
   const username = user?.username || 'Guest';
   
@@ -53,8 +47,8 @@ const MobileSidebar = ({
     onClose();
   };
   
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     onClose();
   };
 
@@ -144,9 +138,14 @@ const MobileSidebar = ({
 
             {isAuthenticated && (
               <div className="mt-auto px-2 pt-4">
-                <Button onClick={handleLogout} disabled={isLoading} variant="outline" className="w-full">
+                <Button
+                  onClick={handleLogout}
+                  disabled={isLoading || isLoggingOut}
+                  variant="outline"
+                  className="w-full"
+                >
                   <LogOut className="h-4 w-4 mr-2" />
-                  Logout
+                  {isLoggingOut ? 'Logging out…' : 'Logout'}
                 </Button>
               </div>
             )}

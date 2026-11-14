@@ -77,11 +77,11 @@ export const useSessionTimeout = () => {
       if (timeUntilExpiry > 0) {
         timeoutRef.current = setTimeout(() => {
           toast.error("Your session has expired. Please log in again.");
-          logout();
+          logout({ automatic: true });
         }, timeUntilExpiry);
       } else {
         // Session has already expired
-        logout();
+        logout({ automatic: true });
       }
 
       // Check for inactivity

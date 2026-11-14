@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Link, useNavigate } from '@/lib/router-compat';
+import { Link } from '@/lib/router-compat';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/auth';
 import { prefetchRoute } from '@/lib/routePrefetch';
@@ -27,8 +27,7 @@ const NavItem = ({
   requiresAuth = false 
 }: NavItemProps) => {
   const { logout, isAuthenticated } = useAuth();
-  const navigate = useNavigate();
-  
+
   // If this is an auth-required item and user is not authenticated, don't render
   if (requiresAuth && !isAuthenticated) {
     return null;
@@ -37,8 +36,8 @@ const NavItem = ({
   const handleClick = (e: React.MouseEvent) => {
     if (isLogout) {
       e.preventDefault();
-      logout();
-      navigate('/');
+      // logout() goes to the landing page itself
+      void logout();
     }
     
     if (onClick) {

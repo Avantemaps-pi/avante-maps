@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@/lib/router-compat';
 import { supabase } from '@/integrations/supabase/client';
 import { initializePiNetwork, getPiAuthResult } from '@/utils/piNetwork/core';
 import { PiUser, AuthContextType, STORAGE_KEY } from './types';
@@ -25,6 +27,23 @@ const hasSandboxMock = (): boolean => {
     return false;
   }
 };
+
+// Pages that work signed out: an automatic logout (session expired) leaves the user on them
+const SIGNED_OUT_PAGES = [
+  '/',
+  '/privacy',
+  '/terms',
+  '/cookies',
+  '/contact',
+  '/about',
+];
+const worksSignedOut = (pathname: string): boolean => {
+  const path = pathname.replace(/\/+$/, '') || '/';
+  return SIGNED_OUT_PAGES.includes(path) || path.startsWith('/business/');
+};
+
+// Kept on the device but private to the user who was signed in
+const USER_CACHE_KEYS = ['bookmark-ids', 'bookmark-places'];
 import { checkAccess } from './authUtils';
 import { performLogin, refreshUserData as refreshUserDataService, requestAuthPermissions } from './authService';
 import { useNetworkStatus } from './networkStatusService';
@@ -42,8 +61,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isSdkInitialized, setIsSdkInitialized] = useState<boolean>(false);
   const [lastRefresh, setLastRefresh] = useState<number>(0);
   const [appReady, setAppReady] = useState<boolean>(true);
+  const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const pendingAuthRef = useRef<boolean>(false);
+  const logoutRef = useRef<Promise<void> | null>(null);
   const initAttempted = useRef<boolean>(false);
   const authTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const devModeToastShown = useRef<boolean>(false);
@@ -512,29 +535,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return undefined;
   }, [user, isOffline, isSdkInitialized, refreshUserData]);
 
-  // logout - properly clear Supabase session and all storage
-  const logout = useCallback(async (): Promise<void> => {
-    try {
-      // Clear Supabase session first
-      await supabase.auth.signOut();
-      secureLog.info('Supabase session cleared');
-    } catch (error) {
-      secureLog.error('Error signing out from Supabase:', error);
-    }
-    
-    // Clear local storage
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(SANDBOX_MOCK_KEY);
-    
-    // Clear any Supabase auth storage keys
-    const keysToRemove = Object.keys(localStorage).filter(key => 
-      key.startsWith('sb-') || key.includes('supabase')
-    );
-    keysToRemove.forEach(key => localStorage.removeItem(key));
-    
-    safeSetUser(null);
-    toast.info("You've been logged out");
-  }, [safeSetUser]);
+  // logout - properly clear Supabase session and all storage, then go to the
+  // signed-out start screen. An automatic logout leaves the user on a page that
+  // works signed out. A second call while one runs gets the same promise.
+  const logout = useCallback(
+    (options: { automatic?: boolean } = {}): Promise<void> => {
+      if (logoutRef.current) return logoutRef.current;
+
+      const run = async () => {
+        if (isMountedRef.current) setIsLoggingOut(true);
+        try {
+          // Clear Supabase session first
+          await supabase.auth.signOut();
+          secureLog.info('Supabase session cleared');
+        } catch (error) {
+          secureLog.error('Error signing out from Supabase:', error);
+        }
+
+        // Clear local storage
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(SANDBOX_MOCK_KEY);
+        USER_CACHE_KEYS.forEach((key) => localStorage.removeItem(key));
+
+        // Clear any Supabase auth storage keys
+        const keysToRemove = Object.keys(localStorage).filter(
+          (key) => key.startsWith('sb-') || key.includes('supabase'),
+        );
+        keysToRemove.forEach((key) => localStorage.removeItem(key));
+
+        safeSetUser(null);
+        // Nothing from this session (notifications, wallet, messages, bookmarks) is shown again or
+        // reused if someone else signs in on this device
+        queryClient.clear();
+
+        if (!options.automatic || !worksSignedOut(window.location.pathname)) {
+          navigate('/', { replace: true });
+        }
+        toast.info("You've been logged out", { id: 'logged-out' });
+      };
+
+      logoutRef.current = run().finally(() => {
+        logoutRef.current = null;
+        if (isMountedRef.current) setIsLoggingOut(false);
+      });
+      return logoutRef.current;
+    },
+    [safeSetUser, queryClient, navigate],
+  );
 
   // Sandbox-only simulated session. No Supabase auth call is made — the app is
   // treated as authenticated locally so UI/flows that don't depend on RLS can
@@ -587,12 +634,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         secureLog.warn('Supabase session expired, logging out');
-        logout();
+        logout({ automatic: true });
         return;
       }
       if (session.user.id !== user.uid) {
         secureLog.warn(`Session uid mismatch in monitor: ${session.user.id} !== ${user.uid}`);
-        logout();
+        logout({ automatic: true });
       }
     }, 10 * 60 * 1000);
     return () => clearInterval(interval);
@@ -617,6 +664,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         loginAsSandbox,
         logout,
+        isLoggingOut,
         authError,
         clearAuthError,
         cancelLogin,
