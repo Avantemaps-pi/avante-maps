@@ -21,7 +21,10 @@ export interface AuthContextType {
   appReady: boolean;
   login: () => Promise<void>;
   loginAsSandbox: () => void;
-  logout: () => void;
+  /** automatic: not asked for by the user (session expired); stays on a page that works signed out */
+  logout: (options?: { automatic?: boolean }) => Promise<void>;
+  /** True from a logout's start until sign-out finishes */
+  isLoggingOut: boolean;
   authError: string | null;
   clearAuthError: () => void;
   cancelLogin: () => void;
