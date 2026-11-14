@@ -129,7 +129,7 @@ const PrivacyPolicy = () => {
                   </p>
                   <p className="mt-2">
                     <strong>Email:</strong> support@avantemaps.com<br />
-                    <strong>Address:</strong> 113 Jabu Ndlovu Street, KZN 3201
+                    <strong>Address:</strong> Pietermaritzburg, South Africa
                   </p>
                 </section>
               </div>

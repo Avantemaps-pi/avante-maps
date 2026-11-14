@@ -55,7 +55,7 @@ const CookiePolicy = () => {
                   Questions? Email us at <strong>support@avantemaps.com</strong>.
                 </p>
                 <p>
-                  <strong>Address:</strong> 113 Jabu Ndlovu Street, KZN 3201
+                  <strong>Address:</strong> Pietermaritzburg, South Africa
                 </p>
               </div>
             </ScrollArea>

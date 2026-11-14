@@ -352,3 +352,18 @@ for (const [name, origin, loads] of [
     }
   });
 }
+
+// ---- No home address
+
+for (const path of ['/contact', '/privacy', '/cookies']) {
+  test(`${path}: the address is "Pietermaritzburg, South Africa", with no street or postcode`, async ({
+    page,
+  }) => {
+    await setup(page);
+    await page.goto(path);
+    await expect(
+      page.getByText('Pietermaritzburg, South Africa'),
+    ).toBeVisible();
+    await expect(page.locator('body')).not.toContainText(/Jabu|Ndlovu|3201/);
+  });
+}

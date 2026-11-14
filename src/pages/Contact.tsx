@@ -101,8 +101,7 @@ const Contact = () => {
                 <MapPin className="h-5 w-5 text-primary" />
                 <h3 className="text-lg font-medium">Address</h3>
               </div>
-              <p className="text-sm">113 Jabu Ndlovu</p>
-              <p className="text-xs text-muted-foreground mt-1">Pietermaritzburg, KZN 3201</p>
+              <p className="text-sm">Pietermaritzburg, South Africa</p>
             </div>
           </div>
         </Card>

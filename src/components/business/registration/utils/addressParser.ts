@@ -2,7 +2,7 @@ import { PlacePrediction } from '@/hooks/useLocationIQAutocomplete';
 
 /**
  * Extract house number from a search query string
- * @param query - The original search query (e.g., "113 Jabu Ndlovu Street")
+ * @param query - The original search query (e.g., "12 Example Street")
  * @returns The extracted house number or empty string
  */
 export const extractHouseNumber = (query: string): string => {
